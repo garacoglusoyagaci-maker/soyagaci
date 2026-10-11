@@ -5,7 +5,7 @@ const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
-const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "" };
+const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1 };
 const VIS = { all: "Tüm üyeler", private: "Sadece ben", custom: "Seçili kişiler" };
 
 // ---------- yardımcılar ----------
@@ -187,8 +187,41 @@ function renderTree(v) {
       ${up ? `<button type="button" class="btn" data-action="goUp">↑ Üst nesil</button>` : ""}
       ${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">+ Kişi</button>` : ""}
     </div>
+    <div class="zoombar">
+      <button type="button" class="btn small" data-action="zoomOut" aria-label="Uzaklaştır">🔍−</button>
+      <span id="zoomPct" class="muted"></span>
+      <button type="button" class="btn small" data-action="zoomIn" aria-label="Yakınlaştır">🔍+</button>
+      <button type="button" class="btn small" data-action="zoomFit">Tümünü sığdır</button>
+      <button type="button" class="btn small" data-action="zoomReset">%100</button>
+    </div>
     <div class="tree-wrap"><div class="tree"><ul>${nodeHtml(S.rootId, new Set())}</ul></div></div>
-    <p class="muted">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın. Başlangıç kişisini değiştirerek farklı bir koldan başlayabilirsiniz.</p>`;
+    <p class="muted">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın. Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
+  applyZoom();
+}
+
+// ---------- yakınlaştırma ----------
+const ZOOM_MIN = 0.15, ZOOM_MAX = 2;
+function applyZoom() {
+  const tree = document.querySelector(".tree");
+  if (!tree) return;
+  tree.style.zoom = S.zoom;
+  const pct = document.getElementById("zoomPct");
+  if (pct) pct.textContent = Math.round(S.zoom * 100) + "%";
+}
+function setZoom(z) {
+  S.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  applyZoom();
+}
+function fitZoom() {
+  const wrap = document.querySelector(".tree-wrap");
+  const tree = document.querySelector(".tree");
+  if (!wrap || !tree) return;
+  tree.style.zoom = 1;
+  tree.style.minWidth = "0";
+  const natural = tree.offsetWidth;
+  tree.style.minWidth = "";
+  setZoom(Math.min(1, (wrap.clientWidth - 4) / natural));
+  wrap.scrollLeft = 0;
 }
 
 // ---------- kişiler listesi ----------
@@ -519,6 +552,10 @@ const actions = {
   open: (id) => openPerson(id),
   backToPerson: (id) => openPerson(id),
   closeModal,
+  zoomIn: () => setZoom(S.zoom * 1.2),
+  zoomOut: () => setZoom(S.zoom / 1.2),
+  zoomReset: () => setZoom(1),
+  zoomFit: fitZoom,
   goUp: () => { const r = byId(S.rootId); S.rootId = r.father_id || r.mother_id || S.rootId; renderView(); },
   addPerson: () => personForm(null),
   editPerson: (id) => personForm(byId(id)),
@@ -574,3 +611,30 @@ document.addEventListener("input", (e) => {
 });
 
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+
+// Ctrl + fare tekerleği ile yakınlaştırma
+document.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey || !e.target.closest?.(".tree-wrap")) return;
+  e.preventDefault();
+  setZoom(S.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+}, { passive: false });
+
+// Fareyle sürükleyerek kaydırma
+let pan = null, panMoved = false;
+document.addEventListener("pointerdown", (e) => {
+  const wrap = e.target.closest?.(".tree-wrap");
+  if (!wrap || e.pointerType !== "mouse" || e.button !== 0) return;
+  pan = { wrap, x: e.clientX, y: e.clientY, sl: wrap.scrollLeft, st: wrap.scrollTop };
+  panMoved = false;
+});
+document.addEventListener("pointermove", (e) => {
+  if (!pan) return;
+  const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+  if (Math.abs(dx) + Math.abs(dy) > 5) panMoved = true;
+  if (panMoved) { pan.wrap.scrollLeft = pan.sl - dx; pan.wrap.scrollTop = pan.st - dy; }
+});
+document.addEventListener("pointerup", () => { pan = null; });
+// sürükleme sonrası yanlışlıkla kişi kartı açılmasın
+document.addEventListener("click", (e) => {
+  if (panMoved) { e.stopPropagation(); e.preventDefault(); panMoved = false; }
+}, true);
