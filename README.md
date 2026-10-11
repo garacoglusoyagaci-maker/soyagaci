@@ -38,8 +38,15 @@
 - `anon` anahtarı herkese açık olabilir, güvenliği `schema.sql` içindeki kurallar sağlar. `service_role` anahtarını **asla** koda koyma.
 - Şifre sıfırlama bu sürümde yok. Gerekirse Supabase > Authentication > Users bölümünden yapılır.
 
-## Güncelleme (şehir ve vefat alanları)
-Daha önce kurulum yaptıysanız, yeni dosyaları yüklemeden önce Supabase > SQL Editor'de `guncelleme.sql` içeriğini bir kez çalıştırın. Verileriniz silinmez.
+## Güncelleme
+Daha önce kurulum yaptıysanız, yeni dosyaları yüklemeden **önce** Supabase > SQL Editor'de `guncelleme.sql` içeriğini bir kez çalıştırın (şehir, vefat işareti, davetler ve bir güvenlik düzeltmesi içerir). Verileriniz silinmez, tekrar çalıştırmak zararsızdır.
+
+## Davet ve yetkiler
+- **Davetler** sekmesi (yönetici): Her kişinin yanına e-posta yazıp Kaydet deyin. O e-postayla kayıt olan kişi otomatik onaylanır ve kendi kartına bağlanır. "Davet gönder" düğmesi hazır mesajı WhatsApp, e-posta ile gönderir ya da kopyalar.
+- **Sadece kendi kaydını düzenler** (varsayılan): Kişi tüm ağacı görür, fotoğraf ekler, ama yalnızca kendi kartını düzenleyebilir. Kişi ekleyemez, başkasını değiştiremez veya silemez.
+- **Kişi de ekleyebilir:** Kişi yeni kişi ekleyebilir. Yalnızca kendi eklediği kişileri ve kendi kartını düzenleyip silebilir.
+- Yönetici yalnızca siz (ve atadıklarınız) olursunuz. Kişi-hesap bağlantısını yalnızca yönetici değiştirebilir.
+- Üyeler sekmesinden zaten kayıtlı birini sonradan bir kişiye bağlayabilirsiniz.
 
 ## Telefona uygulama olarak yükleme
 - **Android (Chrome):** Siteyi açın > ⋮ menü > "Uygulamayı yükle" / "Ana ekrana ekle". Profilim sekmesindeki "Uygulamayı yükle" düğmesi de aynı işi yapar.

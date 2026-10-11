@@ -5,7 +5,7 @@ const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
-const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0 };
+const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false };
 const VIS = { all: "Tüm üyeler", private: "Sadece ben", custom: "Seçili kişiler" };
 
 // ---------- yardımcılar ----------
@@ -51,7 +51,8 @@ const spousesOf = (id) => {
 const childrenOf = (ids) => S.people.filter((p) => ids.includes(p.father_id) || ids.includes(p.mother_id));
 const canAdd = () => !!(S.me && S.me.approved && (S.me.is_admin || S.me.can_add));
 const canEditPerson = (p) => !!(S.me && (S.me.is_admin || p.created_by === S.user.id || S.me.person_id === p.id));
-const canDelSpouse = (r) => !!(S.me && (S.me.is_admin || r.created_by === S.user.id));
+const canDeletePerson = (p) => !!(S.me && (S.me.is_admin || p.created_by === S.user.id));
+const canDelSpouse =(r) => !!(S.me && (S.me.is_admin || r.created_by === S.user.id));
 
 let toastTimer;
 function toast(msg) {
@@ -107,6 +108,12 @@ async function loadAll() {
   S.people = pe.data || [];
   S.spouses = sp.data || [];
   S.me = S.profiles.find((p) => p.id === S.user.id) || null;
+  S.invites = [];
+  if (S.me?.is_admin) {
+    const iv = await sb.from("invites").select("*");
+    if (iv.error) toast("Davetler yüklenemedi (guncelleme.sql çalıştırıldı mı?): " + iv.error.message);
+    else S.invites = iv.data || [];
+  }
 }
 
 // ---------- giriş / kayıt ----------
@@ -158,6 +165,7 @@ function render() {
   const tabs = [["tree", "🌳", "Ağaç"], ["people", "👥", "Kişiler"], ["profile", "👤", "Profilim"]];
   if (S.me.is_admin) {
     const waiting = S.profiles.filter((p) => !p.approved).length;
+    tabs.push(["invites", "✉️", "Davetler"]);
     tabs.push(["members", "⚙️", "Üyeler" + (waiting ? ` (${waiting})` : "")]);
   }
   app.innerHTML = `<header class="top">
@@ -170,10 +178,12 @@ function render() {
 
 function renderView() {
   const v = document.getElementById("view");
+  v.classList.toggle("wide", S.tab === "tree"); // ağaç sekmesi tüm genişliği kullanır
   if (S.tab === "tree") renderTree(v);
   else if (S.tab === "people") renderPeople(v);
   else if (S.tab === "profile") renderProfile(v);
   else if (S.tab === "members") renderMembers(v);
+  else if (S.tab === "invites") renderInvites(v);
 }
 
 // ---------- ağaç ----------
@@ -270,7 +280,9 @@ function renderTree(v) {
       ${up ? `<button type="button" class="btn" data-action="goUp">↑ Üst nesil</button>` : ""}
       ${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">+ Kişi</button>` : ""}
     </div>
+    <div id="treeArea" class="${S.treeFull ? "full" : ""}">
     <div class="zoombar">
+      <button type="button" class="btn small" data-action="toggleFull">${S.treeFull ? "✕ Küçült" : "⛶ Tam ekran"}</button>
       <button type="button" class="btn small" data-action="genForm">🎨 Nesil renkleri</button>
       <button type="button" class="btn small" data-action="zoomOut" aria-label="Uzaklaştır">🔍−</button>
       <span id="zoomPct" class="muted"></span>
@@ -279,7 +291,8 @@ function renderTree(v) {
       <button type="button" class="btn small" data-action="zoomReset">%100</button>
     </div>
     <div class="tree-wrap"><div class="tree"><ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul></div></div>
-    <p class="muted">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın. Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
+    </div>
+    <p class="muted hint">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın. Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
   applyBands();
   applyZoom();
 }
@@ -389,9 +402,8 @@ function renderProfile(v) {
     <form data-form="profile">
       <label>E-posta<input value="${esc(me.email)}" disabled></label>
       <label>Ad Soyad<input name="full_name" required value="${esc(me.full_name)}"></label>
-      <label>Ağaçtaki kişim<select name="person_id"><option value="">— seçilmedi —</option>
-        ${S.people.map((p) => `<option value="${p.id}" ${p.id === me.person_id ? "selected" : ""}>${esc(fullName(p))} ${esc(years(p))}</option>`).join("")}</select></label>
-      <p class="muted">Yetkiniz: ${me.is_admin ? "Yönetici" : me.can_add ? "Kişi ekleyebilir" : "Görüntüleyici"}</p>
+      <p class="muted">Ağaçtaki kişim: <b>${me.person_id && byId(me.person_id) ? esc(fullName(byId(me.person_id))) : "henüz bağlı değil (yöneticiye söyleyin)"}</b></p>
+      <p class="muted">Yetkiniz: ${me.is_admin ? "Yönetici" : me.can_add ? "Kişi ekleyebilir ve kendi kaydını düzenleyebilir" : me.person_id ? "Kendi kaydını düzenleyebilir, fotoğraf ekleyebilir" : "Görüntüleme ve fotoğraf ekleme"}</p>
       <div class="actions"><button class="btn primary">Kaydet</button></div>
     </form></div>
     <div class="panel" style="margin-top:1rem"><h2>📱 Uygulama olarak kullan</h2>
@@ -404,7 +416,7 @@ function renderProfile(v) {
     <div class="panel" style="margin-top:1rem"><button type="button" class="btn danger" data-action="logout">Çıkış yap</button></div>`;
 }
 async function submitProfile(f) {
-  const { error } = await sb.from("profiles").update({ full_name: f.elements.full_name.value.trim(), person_id: f.elements.person_id.value || null }).eq("id", S.user.id);
+  const { error } = await sb.from("profiles").update({ full_name: f.elements.full_name.value.trim() }).eq("id", S.user.id);
   if (error) return toast("Hata: " + error.message);
   await loadAll();
   toast("Kaydedildi");
@@ -413,11 +425,14 @@ async function submitProfile(f) {
 
 // ---------- üyeler (yönetici) ----------
 function renderMembers(v) {
+  const sorted = S.people.slice().sort((a, b) => fullName(a).localeCompare(fullName(b), "tr"));
   v.innerHTML = `<div class="panel" style="max-width:640px"><h2>Üyeler</h2>
-    <p class="muted">Yeni kayıt olanlar onaylanana kadar hiçbir şey göremez.</p>
+    <p class="muted">Davetsiz kayıt olanlar onaylanana kadar hiçbir şey göremez. Davet ettiğiniz kişiler otomatik onaylanır (Davetler sekmesi).</p>
     ${S.profiles.map((p) => {
       const self = p.id === S.user.id;
       return `<div class="member"><div><b>${esc(p.full_name || "")}</b> <span class="muted">${esc(p.email)}</span></div>
+        <label class="memberperson">Ağaçtaki kişisi<select data-member-person data-id="${p.id}"><option value="">— bağlı değil —</option>
+          ${sorted.map((x) => `<option value="${x.id}" ${x.id === p.person_id ? "selected" : ""}>${esc(fullName(x))} ${esc(years(x))}</option>`).join("")}</select></label>
         <div class="opts">
           <label><input type="checkbox" data-member="approved" data-id="${p.id}" ${p.approved ? "checked" : ""} ${self ? "disabled" : ""}> Onaylı</label>
           <label><input type="checkbox" data-member="can_add" data-id="${p.id}" ${p.can_add || p.is_admin ? "checked" : ""} ${p.is_admin ? "disabled" : ""}> Kişi ekleyebilir</label>
@@ -434,6 +449,143 @@ async function changeMember(el) {
   if (error) toast("Hata: " + error.message);
   await loadAll();
   render();
+}
+
+async function changeMemberPerson(el) {
+  const { error } = await sb.from("profiles").update({ person_id: el.value || null }).eq("id", el.dataset.id);
+  if (error) toast("Hata: " + error.message);
+  else toast("Kaydedildi");
+  await loadAll();
+  render();
+}
+
+// ---------- davetler (yönetici) ----------
+const inviteOf = (pid) => S.invites.find((i) => i.person_id === pid);
+const linkedOf = (pid) => S.profiles.find((x) => x.person_id === pid);
+const siteUrl = () => new URL("./", location.href).href;
+
+function inviteStatus(p) {
+  const l = linkedOf(p.id);
+  if (l) return { cls: "ok", text: `✅ Kayıtlı (${l.email})` };
+  if (inviteOf(p.id)) return { cls: "wait", text: "✉️ Davet bekliyor" };
+  return { cls: "none", text: "E-posta girilmedi" };
+}
+
+function filteredInvitePeople() {
+  const q = S.iq.trim().toLocaleLowerCase("tr");
+  return S.people
+    .filter((p) => {
+      if (q && !`${fullName(p)} ${inviteOf(p.id)?.email || ""}`.toLocaleLowerCase("tr").includes(q)) return false;
+      return !S.iFilter || inviteStatus(p).cls === S.iFilter;
+    })
+    .sort((a, b) => fullName(a).localeCompare(fullName(b), "tr"));
+}
+
+function invitesSummary() {
+  const c = { ok: 0, wait: 0, none: 0 };
+  S.people.forEach((p) => { c[inviteStatus(p).cls]++; });
+  return `<div class="stats">
+    <div class="stat"><b>${S.people.length}</b><span>Kişi</span></div>
+    <div class="stat"><b>${c.ok}</b><span>Kayıtlı</span></div>
+    <div class="stat"><b>${c.wait}</b><span>Davet bekliyor</span></div>
+    <div class="stat"><b>${c.none}</b><span>E-postası yok</span></div></div>`;
+}
+
+function invitesListHtml() {
+  const list = filteredInvitePeople();
+  if (!list.length) return `<p class="muted center">Sonuç yok.</p>`;
+  return list.map((p) => {
+    const i = inviteOf(p.id), st = inviteStatus(p);
+    return `<div class="inv" data-person="${p.id}">
+      <div class="inv-top"><b>${esc(fullName(p))}</b><span class="status ${st.cls}">${esc(st.text)}</span></div>
+      <div class="muted inv-sub">${esc([years(p), p.city].filter(Boolean).join(" · "))}</div>
+      <input type="email" inputmode="email" autocomplete="off" placeholder="E-posta adresi" data-inv-email value="${esc(i?.email || "")}">
+      <div class="inv-actions">
+        <select data-inv-perm aria-label="Yetki">
+          <option value="0" ${i?.can_add ? "" : "selected"}>Sadece kendi kaydını düzenler</option>
+          <option value="1" ${i?.can_add ? "selected" : ""}>Kişi de ekleyebilir</option></select>
+        <button type="button" class="btn small primary" data-action="saveInvite" data-id="${p.id}">Kaydet</button>
+        ${i ? `<button type="button" class="btn small" data-action="inviteMsg" data-id="${p.id}">Davet gönder</button>` : ""}
+      </div></div>`;
+  }).join("");
+}
+
+function refreshInvites() {
+  const s = document.getElementById("invsum"), l = document.getElementById("invlist");
+  if (s) s.innerHTML = invitesSummary();
+  if (l) l.innerHTML = invitesListHtml();
+}
+
+function renderInvites(v) {
+  const sel = (val) => (S.iFilter === val ? "selected" : "");
+  v.innerHTML = `<div class="panel wide"><h2>Davetler</h2>
+    <p class="muted">Kişinin yanına e-posta adresini yazıp <b>Kaydet</b> deyin. O e-postayla kayıt olduğunda otomatik onaylanır ve kendi kartına bağlanır.
+    <b>Sadece kendi kaydını düzenler</b> seçeneğinde başka kimseyi değiştiremez; yalnızca kendi bilgilerini düzenler ve fotoğraf ekler.
+    E-posta doğrulaması olmadığından daveti yalnızca ilgili kişiye özel iletin.</p></div>
+    <div id="invsum"></div>
+    <div class="filters">
+      <input id="iq" type="search" placeholder="Ad veya e-posta ara…" value="${esc(S.iq)}">
+      <select id="iFilter" aria-label="Durum"><option value="">Hepsi</option>
+        <option value="none" ${sel("none")}>E-postası olmayanlar</option>
+        <option value="wait" ${sel("wait")}>Davet bekleyenler</option>
+        <option value="ok" ${sel("ok")}>Kayıt olanlar</option></select>
+    </div>
+    <div class="list invlist" id="invlist"></div>`;
+  refreshInvites();
+}
+
+async function saveInvite(pid, el) {
+  const row = el.closest(".inv");
+  const email = row.querySelector("[data-inv-email]").value.trim().toLowerCase();
+  const perm = row.querySelector("[data-inv-perm]").value === "1";
+  el.disabled = true;
+  try {
+    if (!email) {
+      if (!inviteOf(pid)) { toast("Önce e-posta adresini yazın."); return; }
+      const { error } = await sb.from("invites").delete().eq("person_id", pid);
+      if (error) throw error;
+      toast("Davet kaldırıldı");
+    } else {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("Geçerli bir e-posta adresi yazın."); return; }
+      const { error } = await sb.from("invites").upsert({ person_id: pid, email, can_add: perm }, { onConflict: "person_id" });
+      if (error) throw error;
+      toast("Kaydedildi. Bu e-postayla kayıt olunca otomatik onaylanır.");
+    }
+    await loadAll();
+    refreshInvites();
+  } catch (err) {
+    toast(err.code === "23505" ? "Bu e-posta başka bir kişiye atanmış." : "Hata: " + (err.message || err));
+  } finally {
+    el.disabled = false;
+  }
+}
+
+function inviteMsg(pid) {
+  const p = byId(pid), i = inviteOf(pid);
+  if (!p || !i) return;
+  const text = `Merhaba ${p.first_name}, 🌳 aile ağacımıza seni davet ediyorum.
+
+Adres: ${siteUrl()}
+
+Açılan sayfada "Hesabım yok, kayıt ol" diyerek ${i.email} e-posta adresinle kayıt ol ve kendi şifreni belirle. Kayıt olunca otomatik olarak kendi kartına bağlanırsın; bilgilerini düzenleyebilir ve fotoğraf ekleyebilirsin.
+
+Telefonda uygulama gibi kullanmak için: Android Chrome'da ⋮ menü > "Uygulamayı yükle", iPhone Safari'de Paylaş > "Ana Ekrana Ekle".`;
+  showModal(`<h2>Davet gönder</h2>
+    <p class="muted">${esc(fullName(p))} · ${esc(i.email)}</p>
+    <textarea id="inviteText" rows="10" readonly>${esc(text)}</textarea>
+    <div class="actions wrap">
+      <a class="btn primary" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(text)}">WhatsApp</a>
+      <a class="btn" href="mailto:${encodeURIComponent(i.email)}?subject=${encodeURIComponent("Soyağacı daveti")}&body=${encodeURIComponent(text)}">E-posta</a>
+      <button type="button" class="btn" data-action="copyInvite">Kopyala</button>
+    </div>`);
+}
+
+async function copyInvite() {
+  const t = document.getElementById("inviteText");
+  if (!t) return;
+  try { await navigator.clipboard.writeText(t.value); }
+  catch (_) { t.select(); document.execCommand("copy"); }
+  toast("Kopyalandı");
 }
 
 // ---------- kişi ayrıntısı ----------
@@ -461,7 +613,8 @@ async function openPerson(id) {
     </dl>
     <div class="actions wrap">
       ${canAdd() ? `<button type="button" class="btn" data-action="addChild" data-id="${id}">+ Çocuk</button><button type="button" class="btn" data-action="addSibling" data-id="${id}">+ Kardeş</button><button type="button" class="btn" data-action="addSpouse" data-id="${id}">+ Eş</button>` : ""}
-      ${canEditPerson(p) ? `<button type="button" class="btn" data-action="editPerson" data-id="${id}">Düzenle</button><button type="button" class="btn danger" data-action="deletePerson" data-id="${id}">Sil</button>` : ""}
+      ${canEditPerson(p) ? `<button type="button" class="btn" data-action="editPerson" data-id="${id}">Düzenle</button>` : ""}
+      ${canDeletePerson(p) ? `<button type="button" class="btn danger" data-action="deletePerson" data-id="${id}">Sil</button>` : ""}
     </div>
     <h3>Fotoğraflar <button type="button" class="btn small" data-action="addPhoto" data-id="${id}">+ Fotoğraf</button></h3>
     <div id="photoBox" class="muted" data-pid="${id}">Yükleniyor…</div>`);
@@ -728,6 +881,13 @@ const actions = {
   open: (id) => openPerson(id),
   backToPerson: (id) => openPerson(id),
   closeModal,
+  toggleFull: () => {
+    S.treeFull = !S.treeFull;
+    const area = document.getElementById("treeArea");
+    if (area) area.classList.toggle("full", S.treeFull);
+    const b = document.querySelector('[data-action="toggleFull"]');
+    if (b) b.textContent = S.treeFull ? "✕ Küçült" : "⛶ Tam ekran";
+  },
   zoomIn: () => setZoom(S.zoom * 1.2),
   zoomOut: () => setZoom(S.zoom / 1.2),
   zoomReset: () => setZoom(1),
@@ -737,6 +897,9 @@ const actions = {
   pickCity: (k) => { S.fCity = S.fCity === k ? "" : k; renderView(); },
   clearFilters: () => { S.q = ""; S.fCity = ""; S.fGender = ""; S.fStatus = ""; renderView(); },
   addSibling,
+  saveInvite: (id, el) => saveInvite(id, el),
+  inviteMsg: (id) => inviteMsg(id),
+  copyInvite,
   install: async () => {
     if (!deferredInstall) return;
     deferredInstall.prompt();
@@ -788,6 +951,8 @@ document.addEventListener("change", (e) => {
   else if (t.id === "fGender") { S.fGender = t.value; refreshPeople(); }
   else if (t.id === "fStatus") { S.fStatus = t.value; refreshPeople(); }
   else if (t.id === "genOn") { S.gen.on = t.checked; saveGen(); applyBands(); }
+  else if (t.id === "iFilter") { S.iFilter = t.value; refreshInvites(); }
+  else if (t.dataset?.memberPerson !== undefined) changeMemberPerson(t);
   else if (t.dataset?.member) changeMember(t);
   else if (t.name === "visibility") {
     const box = t.closest("form")?.querySelector(".viewers");
@@ -800,6 +965,9 @@ document.addEventListener("input", (e) => {
   if (t.id === "q") {
     S.q = t.value;
     refreshPeople();
+  } else if (t.id === "iq") {
+    S.iq = t.value;
+    refreshInvites();
   } else if (t.dataset?.genColor !== undefined) {
     S.gen.colors[Number(t.dataset.genColor)] = t.value;
     saveGen();
@@ -807,7 +975,11 @@ document.addEventListener("input", (e) => {
   }
 });
 
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (modal.classList.contains("open")) closeModal();
+  else if (S.treeFull) actions.toggleFull();
+});
 
 // Ctrl + fare tekerleği ile yakınlaştırma
 document.addEventListener("wheel", (e) => {
