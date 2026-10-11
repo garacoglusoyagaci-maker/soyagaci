@@ -1,4 +1,2 @@
-// Supabase > Project Settings > API sayfasından alın.
-// "anon public" anahtarı herkese açık olabilir; güvenliği schema.sql'deki kurallar sağlar.
-export const SUPABASE_URL = "https://PROJE-ID.supabase.co";
-export const SUPABASE_ANON_KEY = "ANON-PUBLIC-ANAHTARINIZ";
+export const SUPABASE_URL = "https://fehzpvftqpbddeqfgonk.supabase.co";
+export const SUPABASE_ANON_KEY = "sb_publishable_7oTYmN4Ce9qsLQ62LX2ZQQ_Lw12c8CL";
