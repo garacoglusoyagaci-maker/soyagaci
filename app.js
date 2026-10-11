@@ -19,7 +19,17 @@ const years = (p) => {
 };
 const genderCls = (p) => (p.gender === "E" ? "m" : p.gender === "K" ? "f" : "");
 const profName = (id) => { const x = S.profiles.find((p) => p.id === id); return x ? x.full_name || x.email : ""; };
-const spousesOf = (id) => S.spouses.filter((s) => s.person_a === id || s.person_b === id).map((s) => (s.person_a === id ? s.person_b : s.person_a));
+// Eşler: kayıtlı eşlikler + ortak çocuğu olan baba/anne (eşlik kaydı girilmemiş olsa bile)
+const spousesOf = (id) => {
+  const set = new Set(S.spouses.filter((s) => s.person_a === id || s.person_b === id).map((s) => (s.person_a === id ? s.person_b : s.person_a)));
+  S.people.forEach((c) => {
+    if (c.father_id && c.mother_id) {
+      if (c.father_id === id) set.add(c.mother_id);
+      else if (c.mother_id === id) set.add(c.father_id);
+    }
+  });
+  return [...set].filter((x) => byId(x));
+};
 const childrenOf = (ids) => S.people.filter((p) => ids.includes(p.father_id) || ids.includes(p.mother_id));
 const canAdd = () => !!(S.me && S.me.approved && (S.me.is_admin || S.me.can_add));
 const canEditPerson = (p) => !!(S.me && (S.me.is_admin || p.created_by === S.user.id || S.me.person_id === p.id));
@@ -161,7 +171,17 @@ function card(id) {
     <span class="av">${esc((p.first_name || "?")[0])}</span><span class="nm">${esc(fullName(p))}</span><small>${esc(years(p))}</small></button>`;
 }
 
-function nodeHtml(id, seen) {
+// Kartın altında "↑ Baba & Anne" bağlantıları (ağaçta üstte görünmeyen ebeveynler için)
+function parentsChip(id) {
+  const p = byId(id);
+  if (!p) return "";
+  const list = [byId(p.father_id), byId(p.mother_id)].filter(Boolean);
+  if (!list.length) return "";
+  return `<div class="pchip">↑ ${list.map((x) => `<a href="#" data-action="open" data-id="${x.id}">${esc(fullName(x))}</a>`).join(" &amp; ")}</div>`;
+}
+const partner = (id, withParents) => `<div class="partner">${card(id)}${withParents ? parentsChip(id) : ""}</div>`;
+
+function nodeHtml(id, seen, isRoot = false) {
   if (seen.has(id)) return "";
   seen.add(id);
   const sp = spousesOf(id).filter((x) => !seen.has(x) && byId(x));
@@ -169,7 +189,7 @@ function nodeHtml(id, seen) {
   const kidMap = new Map();
   childrenOf([id, ...sp]).forEach((k) => { if (!seen.has(k.id)) kidMap.set(k.id, k); });
   const kids = [...kidMap.values()].sort((a, b) => String(a.birth_date || "9999").localeCompare(String(b.birth_date || "9999")));
-  let h = `<li><div class="couple">${card(id)}${sp.map((s) => `<span class="amp">&amp;</span>${card(s)}`).join("")}</div>`;
+  let h = `<li><div class="couple">${partner(id, isRoot)}${sp.map((s) => `<span class="amp">&amp;</span>${partner(s, true)}`).join("")}</div>`;
   if (kids.length) h += `<ul>${kids.map((k) => nodeHtml(k.id, seen)).join("")}</ul>`;
   return h + "</li>";
 }
@@ -194,7 +214,7 @@ function renderTree(v) {
       <button type="button" class="btn small" data-action="zoomFit">Tümünü sığdır</button>
       <button type="button" class="btn small" data-action="zoomReset">%100</button>
     </div>
-    <div class="tree-wrap"><div class="tree"><ul>${nodeHtml(S.rootId, new Set())}</ul></div></div>
+    <div class="tree-wrap"><div class="tree"><ul>${nodeHtml(S.rootId, new Set(), true)}</ul></div></div>
     <p class="muted">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın. Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
   applyZoom();
 }
