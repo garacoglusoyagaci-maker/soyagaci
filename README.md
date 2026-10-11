@@ -11,7 +11,11 @@
 - Yönetici her üyeye **kişi ekleme yetkisi** verebilir.
 - Herkes kişilere resim ekleyebilir. Her resim için: **Sadece ben / Tüm üyeler / Seçtiğim kişiler**.
   Bu kurallar veritabanında zorlanır; tarayıcıyı kurcalayan biri bile göremez. Yöneticiler de başkasının "sadece ben" resmini göremez.
-- Ağaç görünümü, eş ve çocuk ekleme, arama, profilini ağaçtaki kişiyle eşleştirme.
+- Ağaç görünümü, eş / çocuk / kardeş ekleme, arama, profilini ağaçtaki kişiyle eşleştirme.
+- Kişiler sekmesinde sayılar (toplam, erkek, kadın, hayatta, vefat), şehir / cinsiyet / durum filtresi.
+- Her kişiye yaşadığı şehir ve "vefat etti" işareti.
+- Ağaçta yakınlaştırma (büyüteç) ve nesillere göre değiştirilebilir yatay zemin renkleri.
+- Telefona uygulama gibi yüklenebilir (PWA), mobil için alt sekme çubuğu.
 
 ## Kurulum
 
@@ -33,3 +37,12 @@
 - Ücretsiz projeler 7 gün hiç kullanılmazsa duraklatılır. Supabase panelinden tek tıkla yeniden açılır.
 - `anon` anahtarı herkese açık olabilir, güvenliği `schema.sql` içindeki kurallar sağlar. `service_role` anahtarını **asla** koda koyma.
 - Şifre sıfırlama bu sürümde yok. Gerekirse Supabase > Authentication > Users bölümünden yapılır.
+
+## Güncelleme (şehir ve vefat alanları)
+Daha önce kurulum yaptıysanız, yeni dosyaları yüklemeden önce Supabase > SQL Editor'de `guncelleme.sql` içeriğini bir kez çalıştırın. Verileriniz silinmez.
+
+## Telefona uygulama olarak yükleme
+- **Android (Chrome):** Siteyi açın > ⋮ menü > "Uygulamayı yükle" / "Ana ekrana ekle". Profilim sekmesindeki "Uygulamayı yükle" düğmesi de aynı işi yapar.
+- **iPhone (Safari):** Paylaş simgesi > "Ana Ekrana Ekle".
+- **Bilgisayar (Chrome/Edge):** Adres çubuğunun sağındaki yükle simgesi.
+Uygulama internet bağlantısı ister, çünkü veriler Supabase'de durur.

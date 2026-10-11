@@ -62,13 +62,13 @@ main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
 .toolbar select, .toolbar input { margin: 0; flex: 1; min-width: 140px; }
 
 /* ağaç */
-.tree-wrap { overflow: auto; padding-bottom: 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); max-height: 75vh; cursor: grab; }
+.tree-wrap { overflow: auto; padding-bottom: 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); max-height: 75vh; cursor: grab; touch-action: pan-x pan-y; }
 .tree-wrap:active { cursor: grabbing; }
 .zoombar { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; flex-wrap: wrap; }
 .zoombar #zoomPct { min-width: 3.2em; text-align: center; font-size: .9rem; }
-.tree { display: inline-block; min-width: 100%; padding: 1rem; text-align: center; }
+.tree { display: inline-block; min-width: 100%; padding: 1rem; text-align: center; position: relative; }
 .tree ul { padding-top: 20px; position: relative; display: flex; justify-content: center; margin: 0; padding-left: 0; }
-.tree > ul { padding-top: 0; }
+.tree > ul { padding-top: 0; z-index: 1; }
 .tree li { list-style: none; text-align: center; position: relative; padding: 20px 6px 0; }
 .tree li::before, .tree li::after { content: ""; position: absolute; top: 0; right: 50%; border-top: 2px solid var(--line); width: 50%; height: 20px; }
 .tree li::after { right: auto; left: 50%; border-left: 2px solid var(--line); }
@@ -121,3 +121,47 @@ figcaption { padding: .4rem .5rem; display: grid; gap: .2rem; }
 
 .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%) translateY(100px); background: #222; color: #fff; padding: .6rem 1rem; border-radius: 99px; transition: transform .25s; z-index: 30; max-width: 90vw; font-size: .9rem; }
 .toast.show { transform: translateX(-50%) translateY(0); }
+
+/* nesil bantları */
+.gband { position: absolute; left: 0; right: 0; opacity: .30; z-index: 0; pointer-events: none; }
+.gband span { position: absolute; left: 8px; top: 4px; font-size: .7rem; font-weight: 700; color: var(--text); opacity: .75; }
+@media (prefers-color-scheme: dark) { .gband { opacity: .22; } }
+.genrow { display: flex; align-items: center; justify-content: space-between; color: var(--text); font-size: 1rem; }
+.genrow input[type=color] { width: 64px; height: 38px; padding: 2px; margin: 0; }
+
+/* sayılar, filtreler */
+.filters { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.filters select { flex: 1; min-width: 120px; margin: 0; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: .5rem; margin-bottom: .6rem; }
+.stat { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: .5rem; text-align: center; }
+.stat b { display: block; font-size: 1.4rem; line-height: 1.1; }
+.stat span { font-size: .75rem; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .8rem; }
+.chip { font: inherit; font-size: .8rem; padding: .25rem .6rem; border-radius: 99px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; }
+.chip.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.city { display: block; font-size: .75rem; color: var(--muted); font-weight: 400; }
+
+/* sekmeler (masaüstü) */
+.top nav .ic { margin-right: .3rem; }
+
+/* küçük ekranlar: alt sekme çubuğu, rahat dokunma alanları */
+@media (max-width: 640px) {
+  .top { padding: calc(.4rem + env(safe-area-inset-top)) .8rem .4rem; }
+  .top .user { display: none; }
+  .top nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 8; background: var(--card); border-top: 1px solid var(--border); padding: .3rem .2rem calc(.3rem + env(safe-area-inset-bottom)); justify-content: space-around; overflow: visible; }
+  .top nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 0; padding: .3rem .1rem; font-size: .7rem; }
+  .top nav .ic { margin: 0; font-size: 1.3rem; line-height: 1.2; }
+  main { padding: .8rem .8rem calc(84px + env(safe-area-inset-bottom)); }
+  .toast { bottom: calc(90px + env(safe-area-inset-bottom)); }
+  .btn { min-height: 42px; }
+  .btn.small { min-height: 34px; }
+  .tree-wrap { max-height: 70vh; max-height: calc(100dvh - 300px); }
+  .sheet { max-height: 94vh; padding-bottom: calc(1.2rem + env(safe-area-inset-bottom)); }
+  .pcard { min-width: 88px; }
+  .list button { padding: .9rem 1rem; }
+  .actions.wrap .btn { flex: 1 1 40%; }
+  .auth { margin: 5vh auto; }
+}
+@media (max-width: 420px) {
+  .row2 { grid-template-columns: 1fr; gap: 0; }
+}

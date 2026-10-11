@@ -5,7 +5,7 @@ const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
-const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1 };
+const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0 };
 const VIS = { all: "Tüm üyeler", private: "Sadece ben", custom: "Seçili kişiler" };
 
 // ---------- yardımcılar ----------
@@ -13,10 +13,28 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const byId = (id) => S.people.find((p) => p.id === id);
 const fullName = (p) => (p ? [p.first_name, p.last_name].filter(Boolean).join(" ") : "");
 const yr = (d) => (d ? String(d).slice(0, 4) : "");
+const isDead = (p) => !!(p.is_deceased || p.death_date);
 const years = (p) => {
   const b = yr(p.birth_date), d = yr(p.death_date);
-  return b && d ? `${b} – ${d}` : b ? b : d ? `† ${d}` : "";
+  if (b && d) return `${b} – ${d}`;
+  if (d) return `† ${d}`;
+  if (p.is_deceased) return b ? `${b} – †` : "†";
+  return b;
 };
+const siblingsOf = (p) => S.people.filter((x) => x.id !== p.id && ((p.father_id && x.father_id === p.father_id) || (p.mother_id && x.mother_id === p.mother_id)));
+
+// Nesil (yatay bant) renkleri: bu tarayıcıda saklanır
+const GEN_DEFAULTS = ["#f4c7a1", "#f1e08a", "#b9e3a4", "#a6d8e8", "#c9b8ee", "#f2b5d4", "#cfd6dc", "#e8c9a0"];
+function loadGen() {
+  try {
+    const g = JSON.parse(localStorage.getItem("soyagaci_gen") || "null");
+    if (g && typeof g === "object") return { on: g.on !== false, colors: Array.isArray(g.colors) ? g.colors : [] };
+  } catch (_) { /* yok sayılır */ }
+  return { on: true, colors: [] };
+}
+function saveGen() { try { localStorage.setItem("soyagaci_gen", JSON.stringify(S.gen)); } catch (_) { /* yok sayılır */ } }
+const genColor = (i) => S.gen.colors[i] || GEN_DEFAULTS[i % GEN_DEFAULTS.length];
+S.gen = loadGen();
 const genderCls = (p) => (p.gender === "E" ? "m" : p.gender === "K" ? "f" : "");
 const profName = (id) => { const x = S.profiles.find((p) => p.id === id); return x ? x.full_name || x.email : ""; };
 // Eşler: kayıtlı eşlikler + ortak çocuğu olan baba/anne (eşlik kaydı girilmemiş olsa bile)
@@ -137,14 +155,14 @@ function render() {
       <button class="link" data-action="logout">Çıkış</button></div>`;
     return;
   }
-  const tabs = [["tree", "Ağaç"], ["people", "Kişiler"], ["profile", "Profilim"]];
+  const tabs = [["tree", "🌳", "Ağaç"], ["people", "👥", "Kişiler"], ["profile", "👤", "Profilim"]];
   if (S.me.is_admin) {
     const waiting = S.profiles.filter((p) => !p.approved).length;
-    tabs.push(["members", "Üyeler" + (waiting ? ` (${waiting})` : "")]);
+    tabs.push(["members", "⚙️", "Üyeler" + (waiting ? ` (${waiting})` : "")]);
   }
   app.innerHTML = `<header class="top">
       <div class="brand">🌳 Soyağacı</div>
-      <nav>${tabs.map(([k, t]) => `<button type="button" class="${S.tab === k ? "on" : ""}" data-action="tab" data-id="${k}">${t}</button>`).join("")}</nav>
+      <nav>${tabs.map(([k, ic, t]) => `<button type="button" class="${S.tab === k ? "on" : ""}" data-action="tab" data-id="${k}"><span class="ic">${ic}</span><span class="tl">${t}</span></button>`).join("")}</nav>
       <div class="user">${esc(S.me.full_name || S.me.email)} <button type="button" class="link" data-action="logout">Çıkış</button></div>
     </header><main id="view"></main>`;
   renderView();
@@ -181,17 +199,62 @@ function parentsChip(id) {
 }
 const partner = (id, withParents) => `<div class="partner">${card(id)}${withParents ? parentsChip(id) : ""}</div>`;
 
-function nodeHtml(id, seen, isRoot = false) {
+function nodeHtml(id, seen, isRoot = false, depth = 0) {
   if (seen.has(id)) return "";
   seen.add(id);
+  if (depth > S.maxGen) S.maxGen = depth;
   const sp = spousesOf(id).filter((x) => !seen.has(x) && byId(x));
   sp.forEach((x) => seen.add(x));
   const kidMap = new Map();
   childrenOf([id, ...sp]).forEach((k) => { if (!seen.has(k.id)) kidMap.set(k.id, k); });
   const kids = [...kidMap.values()].sort((a, b) => String(a.birth_date || "9999").localeCompare(String(b.birth_date || "9999")));
-  let h = `<li><div class="couple">${partner(id, isRoot)}${sp.map((s) => `<span class="amp">&amp;</span>${partner(s, true)}`).join("")}</div>`;
-  if (kids.length) h += `<ul>${kids.map((k) => nodeHtml(k.id, seen)).join("")}</ul>`;
+  let h = `<li><div class="couple" data-gen="${depth}">${partner(id, isRoot)}${sp.map((s) => `<span class="amp">&amp;</span>${partner(s, true)}`).join("")}</div>`;
+  if (kids.length) h += `<ul>${kids.map((k) => nodeHtml(k.id, seen, false, depth + 1)).join("")}</ul>`;
   return h + "</li>";
+}
+
+// Nesil bantları: her nesil için tüm genişlikte yatay zemin rengi
+function applyBands() {
+  const tree = document.querySelector(".tree");
+  if (!tree) return;
+  tree.querySelectorAll(".gband").forEach((b) => b.remove());
+  if (!S.gen.on) return;
+  const prevZoom = tree.style.zoom;
+  tree.style.zoom = 1; // ölçümü gerçek boyutta yap
+  const base = tree.getBoundingClientRect().top;
+  const rows = new Map();
+  tree.querySelectorAll(".couple[data-gen]").forEach((c) => {
+    const g = Number(c.dataset.gen);
+    const r = c.getBoundingClientRect();
+    const cur = rows.get(g) || { top: Infinity, bottom: -Infinity };
+    cur.top = Math.min(cur.top, r.top - base);
+    cur.bottom = Math.max(cur.bottom, r.bottom - base);
+    rows.set(g, cur);
+  });
+  const gens = [...rows.keys()].sort((a, b) => a - b);
+  const total = tree.scrollHeight;
+  gens.forEach((g, i) => {
+    const r = rows.get(g);
+    const prev = i > 0 ? rows.get(gens[i - 1]) : null;
+    const next = i < gens.length - 1 ? rows.get(gens[i + 1]) : null;
+    const top = prev ? (prev.bottom + r.top) / 2 : 0;
+    const bottom = next ? (r.bottom + next.top) / 2 : total;
+    const el = document.createElement("div");
+    el.className = "gband";
+    el.style.cssText = `top:${top}px;height:${Math.max(0, bottom - top)}px;background:${genColor(g)}`;
+    el.innerHTML = `<span>${g + 1}. nesil</span>`;
+    tree.prepend(el);
+  });
+  tree.style.zoom = prevZoom;
+}
+
+function genForm() {
+  const n = Math.max(1, S.maxGen + 1);
+  showModal(`<h2>Nesil renkleri</h2>
+    <p class="muted">Her nesil için yatay zemin rengini seçin. Ayar bu cihazda saklanır.</p>
+    <label class="check"><input type="checkbox" id="genOn" ${S.gen.on ? "checked" : ""}>Nesil renklerini göster</label>
+    ${Array.from({ length: n }, (_, i) => `<label class="genrow"><span>${i + 1}. nesil</span><input type="color" data-gen-color="${i}" value="${genColor(i)}"></label>`).join("")}
+    <div class="actions"><button type="button" class="btn" data-action="genReset">Varsayılana dön</button><button type="button" class="btn primary" data-action="closeModal">Tamam</button></div>`);
 }
 
 function renderTree(v) {
@@ -208,14 +271,16 @@ function renderTree(v) {
       ${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">+ Kişi</button>` : ""}
     </div>
     <div class="zoombar">
+      <button type="button" class="btn small" data-action="genForm">🎨 Nesil renkleri</button>
       <button type="button" class="btn small" data-action="zoomOut" aria-label="Uzaklaştır">🔍−</button>
       <span id="zoomPct" class="muted"></span>
       <button type="button" class="btn small" data-action="zoomIn" aria-label="Yakınlaştır">🔍+</button>
       <button type="button" class="btn small" data-action="zoomFit">Tümünü sığdır</button>
       <button type="button" class="btn small" data-action="zoomReset">%100</button>
     </div>
-    <div class="tree-wrap"><div class="tree"><ul>${nodeHtml(S.rootId, new Set(), true)}</ul></div></div>
+    <div class="tree-wrap"><div class="tree"><ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul></div></div>
     <p class="muted">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın. Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
+  applyBands();
   applyZoom();
 }
 
@@ -245,20 +310,76 @@ function fitZoom() {
 }
 
 // ---------- kişiler listesi ----------
-function peopleListHtml() {
+const cityKey = (c) => String(c || "").trim().toLocaleLowerCase("tr");
+
+function filteredPeople() {
   const q = S.q.trim().toLocaleLowerCase("tr");
-  const list = S.people.filter((p) => !q || fullName(p).toLocaleLowerCase("tr").includes(q));
+  return S.people.filter((p) => {
+    if (q && !`${fullName(p)} ${p.city || ""}`.toLocaleLowerCase("tr").includes(q)) return false;
+    if (S.fCity && cityKey(p.city) !== S.fCity) return false;
+    if (S.fGender === "?" ? !!p.gender : S.fGender && p.gender !== S.fGender) return false;
+    if (S.fStatus === "alive" && isDead(p)) return false;
+    if (S.fStatus === "dead" && !isDead(p)) return false;
+    return true;
+  });
+}
+
+function statsHtml(list) {
+  const m = list.filter((p) => p.gender === "E").length;
+  const f = list.filter((p) => p.gender === "K").length;
+  const u = list.length - m - f;
+  const dead = list.filter(isDead).length;
+  const cell = (n, l) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`;
+  const cities = new Map();
+  list.forEach((p) => {
+    const k = cityKey(p.city);
+    if (!k) return;
+    const c = cities.get(k) || { name: String(p.city).trim(), n: 0 };
+    c.n++;
+    cities.set(k, c);
+  });
+  const chips = [...cities.entries()].sort((a, b) => b[1].n - a[1].n)
+    .map(([k, c]) => `<button type="button" class="chip ${S.fCity === k ? "on" : ""}" data-action="pickCity" data-id="${esc(k)}">${esc(c.name)} · ${c.n}</button>`).join("");
+  return `<div class="stats">${cell(list.length, "Toplam")}${cell(m, "Erkek")}${cell(f, "Kadın")}${u ? cell(u, "Cinsiyet yok") : ""}${cell(list.length - dead, "Hayatta")}${cell(dead, "Vefat")}</div>
+    ${chips ? `<div class="chips">${chips}</div>` : ""}`;
+}
+
+function peopleListHtml(list) {
   if (!list.length) return `<p class="muted center">Sonuç yok.</p>`;
   return list
     .slice()
     .sort((a, b) => fullName(a).localeCompare(fullName(b), "tr"))
-    .map((p) => `<button type="button" data-action="open" data-id="${p.id}"><span>${esc(fullName(p))}</span><span class="muted">${esc(years(p))}</span></button>`)
+    .map((p) => `<button type="button" data-action="open" data-id="${p.id}"><span>${esc(fullName(p))}${p.city ? `<small class="city">📍 ${esc(p.city)}</small>` : ""}</span><span class="muted">${esc(years(p))}</span></button>`)
     .join("");
 }
+
+function refreshPeople() {
+  const list = filteredPeople();
+  const st = document.getElementById("pstats");
+  const pl = document.getElementById("plist");
+  if (st) st.innerHTML = statsHtml(list);
+  if (pl) pl.innerHTML = peopleListHtml(list);
+}
+
 function renderPeople(v) {
-  v.innerHTML = `<div class="toolbar"><input id="q" type="search" placeholder="Ara…" value="${esc(S.q)}">
-    ${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">+ Kişi</button>` : ""}</div>
-    <div class="list" id="plist">${peopleListHtml()}</div>`;
+  const seen = new Map();
+  S.people.forEach((p) => { const k = cityKey(p.city); if (k && !seen.has(k)) seen.set(k, String(p.city).trim()); });
+  const cityOpts = [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1], "tr"))
+    .map(([k, n]) => `<option value="${esc(k)}" ${S.fCity === k ? "selected" : ""}>${esc(n)}</option>`).join("");
+  const sel = (val, cur) => (val === cur ? "selected" : "");
+  v.innerHTML = `<div class="toolbar"><input id="q" type="search" placeholder="Ad veya şehir ara…" value="${esc(S.q)}">
+      ${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">+ Kişi</button>` : ""}</div>
+    <div class="filters">
+      <select id="fCity" aria-label="Şehir"><option value="">Tüm şehirler</option>${cityOpts}</select>
+      <select id="fGender" aria-label="Cinsiyet"><option value="">Erkek + Kadın</option>
+        <option value="E" ${sel("E", S.fGender)}>Erkek</option><option value="K" ${sel("K", S.fGender)}>Kadın</option><option value="?" ${sel("?", S.fGender)}>Cinsiyet yok</option></select>
+      <select id="fStatus" aria-label="Durum"><option value="">Hayatta + Vefat</option>
+        <option value="alive" ${sel("alive", S.fStatus)}>Hayatta</option><option value="dead" ${sel("dead", S.fStatus)}>Vefat etti</option></select>
+      <button type="button" class="btn small" data-action="clearFilters">Temizle</button>
+    </div>
+    <div id="pstats"></div>
+    <div class="list" id="plist"></div>`;
+  refreshPeople();
 }
 
 // ---------- profilim ----------
@@ -272,7 +393,15 @@ function renderProfile(v) {
         ${S.people.map((p) => `<option value="${p.id}" ${p.id === me.person_id ? "selected" : ""}>${esc(fullName(p))} ${esc(years(p))}</option>`).join("")}</select></label>
       <p class="muted">Yetkiniz: ${me.is_admin ? "Yönetici" : me.can_add ? "Kişi ekleyebilir" : "Görüntüleyici"}</p>
       <div class="actions"><button class="btn primary">Kaydet</button></div>
-    </form></div>`;
+    </form></div>
+    <div class="panel" style="margin-top:1rem"><h2>📱 Uygulama olarak kullan</h2>
+      ${isStandalone()
+        ? `<p class="muted">Şu anda uygulama olarak kullanıyorsunuz.</p>`
+        : deferredInstall
+          ? `<p class="muted">Telefonunuzun ana ekranına ekleyip uygulama gibi açabilirsiniz.</p><button type="button" class="btn primary" data-action="install">Uygulamayı yükle</button>`
+          : `<p class="muted"><b>Android (Chrome):</b> ⋮ menü &gt; "Uygulamayı yükle" veya "Ana ekrana ekle".<br><b>iPhone (Safari):</b> Paylaş simgesi &gt; "Ana Ekrana Ekle".<br><b>Bilgisayar (Chrome/Edge):</b> Adres çubuğunun sağındaki yükle simgesi.</p>`}
+    </div>
+    <div class="panel" style="margin-top:1rem"><button type="button" class="btn danger" data-action="logout">Çıkış yap</button></div>`;
 }
 async function submitProfile(f) {
   const { error } = await sb.from("profiles").update({ full_name: f.elements.full_name.value.trim(), person_id: f.elements.person_id.value || null }).eq("id", S.user.id);
@@ -316,17 +445,22 @@ async function openPerson(id) {
   const father = byId(p.father_id), mother = byId(p.mother_id);
   const spRows = S.spouses.filter((s) => s.person_a === id || s.person_b === id);
   const kids = childrenOf([id]);
+  const sibs = siblingsOf(p);
+  const explicitSp = new Set(spRows.map((r) => (r.person_a === id ? r.person_b : r.person_a)));
+  const impliedSp = spousesOf(id).filter((x) => !explicitSp.has(x)).map(byId);
   showModal(`
     <div class="phead"><span class="av big">${esc((p.first_name || "?")[0])}</span>
-      <div><h2>${esc(fullName(p))}</h2><div class="muted">${esc(years(p))}${p.birth_place ? ` · ${esc(p.birth_place)}` : ""}</div></div></div>
+      <div><h2>${esc(fullName(p))}</h2><div class="muted">${esc(years(p))}${isDead(p) ? " · vefat etti" : ""}${p.birth_place ? ` · doğum: ${esc(p.birth_place)}` : ""}</div>
+        ${p.city ? `<div class="muted">📍 ${esc(p.city)}</div>` : ""}</div></div>
     ${p.notes ? `<p class="notes">${esc(p.notes)}</p>` : ""}
     <dl class="rel">
       ${father || mother ? `<dt>Ebeveyn</dt><dd>${[father, mother].filter(Boolean).map(personLink).join(", ")}</dd>` : ""}
-      ${spRows.length ? `<dt>Eş</dt><dd>${spRows.map((r) => personLink(byId(r.person_a === id ? r.person_b : r.person_a)) + (canDelSpouse(r) ? ` <button type="button" class="mini" data-action="delSpouse" data-id="${r.id}" data-person="${id}" title="Eşliği kaldır">×</button>` : "")).join("<br>")}</dd>` : ""}
+      ${spRows.length || impliedSp.length ? `<dt>Eş</dt><dd>${[...spRows.map((r) => personLink(byId(r.person_a === id ? r.person_b : r.person_a)) + (canDelSpouse(r) ? ` <button type="button" class="mini" data-action="delSpouse" data-id="${r.id}" data-person="${id}" title="Eşliği kaldır">×</button>` : "")), ...impliedSp.map(personLink)].join("<br>")}</dd>` : ""}
+      ${sibs.length ? `<dt>Kardeşler</dt><dd>${sibs.map(personLink).join(", ")}</dd>` : ""}
       ${kids.length ? `<dt>Çocuklar</dt><dd>${kids.map(personLink).join(", ")}</dd>` : ""}
     </dl>
     <div class="actions wrap">
-      ${canAdd() ? `<button type="button" class="btn" data-action="addChild" data-id="${id}">+ Çocuk</button><button type="button" class="btn" data-action="addSpouse" data-id="${id}">+ Eş</button>` : ""}
+      ${canAdd() ? `<button type="button" class="btn" data-action="addChild" data-id="${id}">+ Çocuk</button><button type="button" class="btn" data-action="addSibling" data-id="${id}">+ Kardeş</button><button type="button" class="btn" data-action="addSpouse" data-id="${id}">+ Eş</button>` : ""}
       ${canEditPerson(p) ? `<button type="button" class="btn" data-action="editPerson" data-id="${id}">Düzenle</button><button type="button" class="btn danger" data-action="deletePerson" data-id="${id}">Sil</button>` : ""}
     </div>
     <h3>Fotoğraflar <button type="button" class="btn small" data-action="addPhoto" data-id="${id}">+ Fotoğraf</button></h3>
@@ -369,8 +503,11 @@ function personForm(p, preset = {}) {
       <div class="row2"><label>Cinsiyet<select name="gender"><option value="">—</option>
           <option value="E" ${v.gender === "E" ? "selected" : ""}>Erkek</option><option value="K" ${v.gender === "K" ? "selected" : ""}>Kadın</option></select></label>
         <label>Doğum yeri<input name="birth_place" value="${esc(v.birth_place)}"></label></div>
+      <label>Yaşadığı şehir<input name="city" list="cityList" placeholder="Örn. İstanbul" value="${esc(v.city)}"></label>
+      <datalist id="cityList">${[...new Set(S.people.map((x) => String(x.city || "").trim()).filter(Boolean))].map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
       <div class="row2"><label>Doğum tarihi<input type="date" name="birth_date" value="${esc(v.birth_date)}"></label>
         <label>Ölüm tarihi<input type="date" name="death_date" value="${esc(v.death_date)}"></label></div>
+      <label class="check"><input type="checkbox" name="is_deceased" ${v.is_deceased || v.death_date ? "checked" : ""}>Vefat etti</label>
       <label>Baba<select name="father_id">${opt(others.filter((x) => x.gender !== "K"), v.father_id)}</select></label>
       <label>Anne<select name="mother_id">${opt(others.filter((x) => x.gender !== "E"), v.mother_id)}</select></label>
       <label>Notlar<textarea name="notes" rows="3">${esc(v.notes)}</textarea></label>
@@ -385,6 +522,7 @@ async function submitPerson(f) {
     first_name: e.first_name.value.trim(), last_name: val("last_name"), gender: val("gender"),
     birth_place: val("birth_place"), birth_date: val("birth_date"), death_date: val("death_date"),
     father_id: val("father_id"), mother_id: val("mother_id"), notes: val("notes"),
+    city: val("city"), is_deceased: e.is_deceased.checked || !!val("death_date"),
   };
   const btn = f.querySelector("button.primary");
   btn.disabled = true;
@@ -429,6 +567,15 @@ function addChild(id) {
   else { preset.father_id = id; preset.mother_id = sp.find((x) => x.gender !== "E")?.id; }
   preset.last_name = (p.gender === "K" ? sp[0] : p)?.last_name || "";
   personForm(null, preset);
+}
+
+function addSibling(id) {
+  const p = byId(id);
+  if (!p.father_id && !p.mother_id) {
+    toast("Kardeş eklemek için önce bu kişinin baba veya annesini girin (Düzenle).");
+    return;
+  }
+  personForm(null, { father_id: p.father_id, mother_id: p.mother_id, last_name: p.last_name || "", city: p.city || "" });
 }
 
 // ---------- eş ----------
@@ -564,6 +711,15 @@ async function deletePhoto(id, personId) {
 }
 
 // ---------- olaylar ----------
+let deferredInstall = null;
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstall = e;
+  if (S.me && S.tab === "profile") renderView();
+});
+window.addEventListener("appinstalled", () => { deferredInstall = null; toast("Uygulama yüklendi"); });
+
 const actions = {
   logout: async () => { await sb.auth.signOut(); },
   refresh: async () => { await loadAll(); render(); },
@@ -576,6 +732,18 @@ const actions = {
   zoomOut: () => setZoom(S.zoom / 1.2),
   zoomReset: () => setZoom(1),
   zoomFit: fitZoom,
+  genForm,
+  genReset: () => { S.gen.colors = []; saveGen(); applyBands(); genForm(); },
+  pickCity: (k) => { S.fCity = S.fCity === k ? "" : k; renderView(); },
+  clearFilters: () => { S.q = ""; S.fCity = ""; S.fGender = ""; S.fStatus = ""; renderView(); },
+  addSibling,
+  install: async () => {
+    if (!deferredInstall) return;
+    deferredInstall.prompt();
+    await deferredInstall.userChoice;
+    deferredInstall = null;
+    renderView();
+  },
   goUp: () => { const r = byId(S.rootId); S.rootId = r.father_id || r.mother_id || S.rootId; renderView(); },
   addPerson: () => personForm(null),
   editPerson: (id) => personForm(byId(id)),
@@ -616,6 +784,10 @@ document.addEventListener("submit", async (e) => {
 document.addEventListener("change", (e) => {
   const t = e.target;
   if (t.id === "rootSel") { S.rootId = t.value; renderView(); }
+  else if (t.id === "fCity") { S.fCity = t.value; refreshPeople(); }
+  else if (t.id === "fGender") { S.fGender = t.value; refreshPeople(); }
+  else if (t.id === "fStatus") { S.fStatus = t.value; refreshPeople(); }
+  else if (t.id === "genOn") { S.gen.on = t.checked; saveGen(); applyBands(); }
   else if (t.dataset?.member) changeMember(t);
   else if (t.name === "visibility") {
     const box = t.closest("form")?.querySelector(".viewers");
@@ -624,9 +796,14 @@ document.addEventListener("change", (e) => {
 });
 
 document.addEventListener("input", (e) => {
-  if (e.target.id === "q") {
-    S.q = e.target.value;
-    document.getElementById("plist").innerHTML = peopleListHtml();
+  const t = e.target;
+  if (t.id === "q") {
+    S.q = t.value;
+    refreshPeople();
+  } else if (t.dataset?.genColor !== undefined) {
+    S.gen.colors[Number(t.dataset.genColor)] = t.value;
+    saveGen();
+    applyBands();
   }
 });
 
@@ -638,6 +815,19 @@ document.addEventListener("wheel", (e) => {
   e.preventDefault();
   setZoom(S.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
 }, { passive: false });
+
+// Dokunmatik ekranda iki parmakla yakınlaştırma
+let pinch = null;
+const touchDist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+document.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 2 && e.target.closest?.(".tree-wrap")) pinch = { d: touchDist(e.touches), z: S.zoom };
+}, { passive: true });
+document.addEventListener("touchmove", (e) => {
+  if (!pinch || e.touches.length !== 2) return;
+  e.preventDefault();
+  setZoom(pinch.z * (touchDist(e.touches) / pinch.d));
+}, { passive: false });
+document.addEventListener("touchend", () => { pinch = null; });
 
 // Fareyle sürükleyerek kaydırma
 let pan = null, panMoved = false;
@@ -658,3 +848,8 @@ document.addEventListener("pointerup", () => { pan = null; });
 document.addEventListener("click", (e) => {
   if (panMoved) { e.stopPropagation(); e.preventDefault(); panMoved = false; }
 }, true);
+
+// Çevrimdışı kabuk ve "uygulama olarak yükle" için servis çalışanı
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
