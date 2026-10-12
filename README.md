@@ -57,6 +57,13 @@ Daha önce kurulum yaptıysanız, yeni dosyaları yüklemeden **önce** Supabase
 - Yönetici yalnızca siz (ve atadıklarınız) olursunuz. Kişi-hesap bağlantısını yalnızca yönetici değiştirebilir.
 - Üyeler sekmesinden zaten kayıtlı birini sonradan bir kişiye bağlayabilirsiniz.
 
+## Gizli aile tarafı
+- Eş olarak eklediğiniz kişinin kartını açın (Aile tarafı görünürlüğü): **Herkes görsün**, **yalnızca anne ve babası görünsün** ya da **hiçbiri görünmesin** seçeneklerinden birini seçin.
+- Gizlenenler (anne-baba, kardeşler, dede-nine, amca-hala, kuzenler ve eşleri) yalnızca sizin ve o kişinin bağlı hesabının (eşiniz) ekranında görünür. Kartlarında 🔒 işareti olur. Eşinizin görebilmesi için onu **Davetler** sekmesinden kendi kişi kartına bağlayın.
+- Gizleme veritabanı kuralıdır; ekranda saklanmaz, başkaları API'den de göremez. Gizli kişilerin fotoğrafları, notları ve eşlik kayıtları da gizlenir.
+- Çocuklar ve eş her zaman görünür. Sonradan eklediğiniz yakınlar da ayara göre otomatik gizlenir.
+- İlk kez kullanmadan önce `gizlilik.sql` dosyasını Supabase > SQL Editor'de bir kez çalıştırın (tekrar çalıştırmak zararsız).
+
 ## Telefona uygulama olarak yükleme
 - **Android (Chrome):** Siteyi açın > ⋮ menü > "Uygulamayı yükle" / "Ana ekrana ekle". Profilim sekmesindeki "Uygulamayı yükle" düğmesi de aynı işi yapar.
 - **iPhone (Safari):** Paylaş simgesi > "Ana Ekrana Ekle".

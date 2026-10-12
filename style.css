@@ -247,3 +247,8 @@ main.wide { max-width: none; padding-left: .6rem; padding-right: .6rem; }
 .ancarrow { color: var(--line); font-size: 1.3rem; line-height: 1; margin: -2px 0 6px; }
 .ancmore, .more { text-align: center; margin: 4px 0; }
 .toolbar .inl input[type=checkbox] { width: auto; min-width: 0; flex: none; margin: 0; }
+
+/* ---------- gizli aile tarafı ---------- */
+.pcard .lk { position: absolute; bottom: 3px; right: 5px; font-size: .7rem; line-height: 1; }
+.hiddenbar { margin: .4rem 0; padding: .35rem .6rem; border-radius: 8px; background: var(--card); border: 1px dashed var(--border); font-size: .85rem; }
+select[data-side] { width: 100%; }

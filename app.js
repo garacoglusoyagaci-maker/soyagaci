@@ -105,7 +105,32 @@ const inLine = (id) => { if (isFull()) return true; const l = lineage(); return 
 const canEditPerson = (p) => isFull() || (!!S.me && S.me.person_id === p.id);
 const canDeletePerson = () => isAdmin();
 const canDelSpouse = () => isAdmin();
-const canAddParent = (p, role) => !(role === "father" ? p.father_id : p.mother_id) && inLine(p.id);
+const canAddParent = (p, role) => !(role === "father" ? p.father_id || p._hfather_id : p.mother_id || p._hmother_id) && inLine(p.id);
+
+// Aile tarafı görünürlüğü (kişinin ebeveyn tarafı diğer üyelere ne kadar görünsün)
+const SIDE = { all: "Herkes görsün (varsayılan)", parents: "Yalnızca anne ve babası görünsün, diğerleri gizli", none: "Hiçbiri görünmesin (tüm ebeveyn tarafı gizli)" };
+const hiddenLabel = (p) => (p.hidden_for ? "🔒 Gizli: yalnızca siz ve " + (fullName(byId(p.hidden_for)) || "eşiniz") + " görür" : "");
+function sideSection(p, hasSpouse) {
+  if (!isAdmin() || !("side_mode" in p) || !hasSpouse) return "";
+  const linked = linkedOf(p.id);
+  const who = linked ? `siz ve ${esc(linked.full_name || linked.email)}` : `yalnızca siz (${esc(fullName(p))} kişisinin hesabını <b>Davetler</b> sekmesinden bağlarsanız o da görür)`;
+  return `<h3>Aile tarafı görünürlüğü</h3>
+    <p class="muted small">${esc(fullName(p))} kişisinin ebeveyn tarafı (anne-baba, kardeşler, dede-nine, amca-hala, kuzenler ve eşleri) diğer üyelere nasıl görünsün? Gizlenenleri ${who} görür. Çocukları ve eşi her zaman görünür. Sonradan eklenen yakınlar da otomatik uyar.</p>
+    <select data-side="${p.id}">${Object.entries(SIDE).map(([k, v]) => `<option value="${k}" ${(p.side_mode || "all") === k ? "selected" : ""}>${v}</option>`).join("")}</select>`;
+}
+async function changeSide(el) {
+  const id = el.dataset.side;
+  el.disabled = true;
+  const { error } = await sb.rpc("set_side_privacy", { sid: id, mode: el.value });
+  if (error) {
+    el.disabled = false;
+    return toast(/set_side_privacy|schema cache/.test(error.message || "") ? "Veritabanı güncel değil. Supabase > SQL Editor'de gizlilik.sql dosyasını çalıştırın." : "Hata: " + error.message);
+  }
+  await loadAll();
+  render();
+  toast("Kaydedildi");
+  openPerson(id);
+}
 
 let toastTimer;
 function toast(msg) {
@@ -178,6 +203,9 @@ async function loadAll() {
   if (pr.error) toast("Veri yüklenemedi: " + pr.error.message);
   S.profiles = pr.data || [];
   S.people = pe.data || [];
+  // Gizli tarafa giden ebeveyn bağları bu kullanıcıya kapalıdır: kişi ağaçta kayıp görünmesin diye bağı boş sayarız
+  const seenIds = new Set(S.people.map((x) => x.id));
+  S.people.forEach((x) => ["father_id", "mother_id"].forEach((k) => { if (x[k] && !seenIds.has(x[k])) { x["_h" + k] = true; x[k] = null; } }));
   S.spouses = sp.data || [];
   S.me = S.profiles.find((p) => p.id === S.user.id) || null;
   S.invites = [];
@@ -272,7 +300,7 @@ function card(id) {
   const p = byId(id);
   if (!p) return "";
   return `<button type="button" class="pcard ${genderCls(p)}${isDead(p) ? " dead" : ""}" data-action="open" data-id="${id}">
-    ${isDead(p) ? `<span class="dm" title="Vefat etti. Allah rahmet eylesin">&#9770;&#xFE0E;</span>` : ""}${S.photoSet.has(id) ? `<span class="cm" title="Fotoğraf var">📷</span>` : ""}
+    ${isDead(p) ? `<span class="dm" title="Vefat etti. Allah rahmet eylesin">&#9770;&#xFE0E;</span>` : ""}${S.photoSet.has(id) ? `<span class="cm" title="Fotoğraf var">📷</span>` : ""}${p.hidden_for ? `<span class="lk" title="${esc(hiddenLabel(p))}">🔒</span>` : ""}
     <span class="av">${esc((p.first_name || "?")[0])}</span><span class="nm">${esc(fullName(p))}</span><small>${esc(years(p))}</small></button>`;
 }
 
@@ -571,7 +599,7 @@ function sortPeople(list, key = S.sort) {
 function peopleListHtml(list) {
   if (!list.length) return `<p class="muted center">Sonuç yok.</p>`;
   return sortPeople(list)
-    .map((p) => { const bits = previewBits(p); return `<button type="button" data-action="open" data-id="${p.id}"><span>${S.photoSet.has(p.id) ? "📷 " : ""}${esc(fullName(p))}${bits.length ? `<small class="city">${esc(bits.join(" · "))}</small>` : ""}</span><span class="muted">${esc(years(p))}</span></button>`; })
+    .map((p) => { const bits = previewBits(p); return `<button type="button" data-action="open" data-id="${p.id}"><span>${S.photoSet.has(p.id) ? "📷 " : ""}${p.hidden_for ? "🔒 " : ""}${esc(fullName(p))}${bits.length ? `<small class="city">${esc(bits.join(" · "))}</small>` : ""}</span><span class="muted">${esc(years(p))}</span></button>`; })
     .join("");
 }
 
@@ -855,6 +883,7 @@ async function openPerson(id) {
       <div><h2>${esc(fullName(p))} ${isDead(p) ? `<span class="dm-inline" title="Vefat etti">&#9770;&#xFE0E;</span>` : ""}</h2>
         <div class="muted">${esc(years(p))}${isDead(p) ? " · vefat etti" : ""}</div></div></div>
     ${pend ? `<p class="pending">⏳ Bu kişi için ${pend} değişiklik talebi onay bekliyor.</p>` : ""}
+    ${p.hidden_for ? `<p class="hiddenbar">${esc(hiddenLabel(p))}</p>` : ""}
     ${info.length ? `<table class="infotable">${info.map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join("")}</table>` : ""}
     ${p.notes ? `<p class="notes">${esc(p.notes)}</p>` : ""}
     <h3>Aile</h3>
@@ -866,6 +895,7 @@ async function openPerson(id) {
       ${canDeletePerson() ? `<button type="button" class="btn danger" data-action="deletePerson" data-id="${id}">Sil</button>` : ""}
     </div>
     ${isAdmin() ? "" : `<p class="muted small">Yaptığınız değişiklikler yönetici onayından sonra listeye eklenir.</p>`}
+    ${sideSection(p, spRows.length || impliedSp.length)}
     <h3>Bilgi notları <button type="button" class="btn small" data-action="addNote" data-id="${id}">+ Not</button></h3>
     ${notes.length ? notes.map((n) => `<div class="note"><div class="muted">${esc(n.author_name || profName(n.author_id) || "")} · ${fmtDT(n.created_at)}${isAdmin() ? ` <button type="button" class="mini" data-action="delNote" data-id="${n.id}" data-person="${id}" title="Notu sil">×</button>` : ""}</div>${esc(n.body)}</div>`).join("") : `<p class="muted">Henüz not yok.</p>`}
     <h3>Fotoğraflar <button type="button" class="btn small" data-action="addPhoto" data-id="${id}">+ Fotoğraf</button></h3>
@@ -936,7 +966,7 @@ function showVal(k, v) {
 function personForm(p, preset = {}) {
   const v = p || preset;
   const others = S.people.filter((x) => !p || x.id !== p.id);
-  const lockParent = (k) => !isAdmin() && p && p[k]; // yönetici dışı mevcut ebeveyn bağını değiştiremez/silemez
+  const lockParent = (k) => !isAdmin() && p && (p[k] || p["_h" + k]); // yönetici dışı mevcut ebeveyn bağını değiştiremez/silemez
   const opt = (list, sel) => `<option value="">—</option>` + list.map((x) => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(fullName(x))} ${esc(years(x))}</option>`).join("");
   const dead = !!(v.is_deceased || v.death_date);
   showModal(`<h2>${p ? "Kişiyi düzenle" : "Yeni kişi"}</h2>
@@ -1476,6 +1506,7 @@ document.addEventListener("change", (e) => {
   else if (t.id === "sortSel") { S.sort = t.value; refreshPeople(); }
   else if (t.id === "bloodMissing") { S.bloodMissing = t.checked; renderView(); }
   else if (t.dataset?.blood !== undefined) changeBlood(t);
+  else if (t.dataset?.side) changeSide(t);
   else if (t.dataset?.prefSel) { S.prefs[t.dataset.prefSel] = t.value; savePrefs(); toast("Kaydedildi"); }
   else if (t.dataset?.pref) { S.prefs[t.dataset.pref] = t.checked; savePrefs(); }
   else if (t.name === "is_deceased") { const b = t.closest("form")?.querySelector(".burialRow"); if (b) b.hidden = !t.checked; }
