@@ -6,6 +6,8 @@ const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
 const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, prefs: loadPrefs() };
+const startTab = () => (S.prefs.start === "tree" ? "tree" : "people");
+S.tab = startTab();
 const BLOOD = ["A+", "A-", "B+", "B-", "AB+", "AB-", "0+", "0-"];
 const SORTS = { alpha: "Alfabetik (A → Z)", age_old: "Yaşa göre (büyükten küçüğe)", age_young: "Yaşa göre (küçükten büyüğe)", created_old: "Kayıt sırası (ilk eklenen önce)", created_new: "Kayıt sırası (son eklenen önce)", family: "Aile içi sıralama" };
 const VIS = { all: "Tüm üyeler", private: "Sadece ben", custom: "Seçili kişiler" };
@@ -23,6 +25,8 @@ const years = (p) => {
   if (p.is_deceased) return b ? `${b} – vefat` : "vefat";
   return b;
 };
+// Kardeş sırası: en büyükten en küçüğe (doğum tarihi yoksa kayıt sırasına göre, tarihliler önde)
+const kidCmp = (a, b) => (!a.birth_date - !b.birth_date) || String(a.birth_date || "").localeCompare(String(b.birth_date || "")) || String(a.created_at).localeCompare(String(b.created_at)) || fullName(a).localeCompare(fullName(b), "tr");
 const siblingsOf = (p) => S.people.filter((x) => x.id !== p.id && ((p.father_id && x.father_id === p.father_id) || (p.mother_id && x.mother_id === p.mother_id)));
 
 // Nesil (yatay bant) renkleri: bu tarayıcıda saklanır
@@ -40,7 +44,7 @@ S.gen = loadGen();
 // Önizleme ayarları (bu cihazda saklanır)
 const PREF_LABELS = { photo: "Fotoğraf (büyütülmüş)", age: "Yaş (yıl ve ay)", city: "Yaşadığı şehir", burial: "Defin yeri (vefat edenler)", blood: "Kan grubu" };
 function loadPrefs() {
-  const d = { photo: true, age: true, city: true, burial: true, blood: true };
+  const d = { photo: true, age: true, city: true, burial: true, blood: true, start: "list", dropSort: "age_old" };
   try { Object.assign(d, JSON.parse(localStorage.getItem("soyagaci_prefs") || "{}")); } catch (_) { /* yok sayılır */ }
   return d;
 }
@@ -136,7 +140,7 @@ sb.auth.onAuthStateChange((event, session) => {
 
 async function boot(session) {
   if (!session) {
-    Object.assign(S, { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null });
+    Object.assign(S, { user: null, me: null, people: [], spouses: [], profiles: [], tab: startTab(), rootId: null });
     closeModal();
     renderAuth("login");
     return;
@@ -278,8 +282,8 @@ function nodeHtml(id, seen, isRoot = false, depth = 0) {
   sp.forEach((x) => seen.add(x));
   const kidMap = new Map();
   childrenOf([id, ...sp]).forEach((k) => { if (!seen.has(k.id)) kidMap.set(k.id, k); });
-  const kids = [...kidMap.values()].sort((a, b) => String(a.birth_date || "9999").localeCompare(String(b.birth_date || "9999")));
-  let h = `<li><div class="couple" data-gen="${depth}">${partner(id, isRoot)}${sp.map((s) => `<span class="amp">&amp;</span>${partner(s, true)}`).join("")}</div>`;
+  const kids = [...kidMap.values()].sort(kidCmp);
+  let h = `<li><div class="couple" data-gen="${depth}">${partner(id, isRoot)}${sp.map((s) => `<span class="amp" title="Eşler" aria-label="Eş">♥</span>${partner(s, true)}`).join("")}</div>`;
   if (kids.length) h += `<ul>${kids.map((k) => nodeHtml(k.id, seen, false, depth + 1)).join("")}</ul>`;
   return h + "</li>";
 }
@@ -337,7 +341,7 @@ function renderTree(v) {
   const root = byId(S.rootId);
   const up = root.father_id || root.mother_id;
   v.innerHTML = `<div class="toolbar">
-      <select id="rootSel" aria-label="Başlangıç kişisi">${S.people.map((p) => `<option value="${p.id}" ${p.id === S.rootId ? "selected" : ""}>${esc(fullName(p))} ${esc(years(p))}</option>`).join("")}</select>
+      <select id="rootSel" aria-label="Başlangıç kişisi">${sortPeople(S.people, S.prefs.dropSort).map((p) => `<option value="${p.id}" ${p.id === S.rootId ? "selected" : ""}>${esc(fullName(p))} ${esc(years(p))}</option>`).join("")}</select>
       ${up ? `<button type="button" class="btn" data-action="goUp">↑ Üst nesil</button>` : ""}
       ${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">+ Kişi</button>` : ""}
     </div>
@@ -427,14 +431,14 @@ function familyRank() {
     rank.set(id, rank.size);
     const sp = spousesOf(id);
     sp.forEach((x) => { if (!rank.has(x)) rank.set(x, rank.size); });
-    childrenOf([id, ...sp]).sort((a, b) => String(a.birth_date || "9999").localeCompare(String(b.birth_date || "9999"))).forEach((k) => visit(k.id));
+    childrenOf([id, ...sp]).sort(kidCmp).forEach((k) => visit(k.id));
   };
   if (S.people.length) visit(defaultRoot());
   S.people.filter((p) => !p.father_id && !p.mother_id).forEach((p) => visit(p.id));
   S.people.forEach((p) => visit(p.id));
   return rank;
 }
-function sortPeople(list) {
+function sortPeople(list, key = S.sort) {
   const bd = (p) => String(p.birth_date || "");
   const cmpBirth = (dir) => (a, b) => (!bd(a) - !bd(b)) || dir * bd(a).localeCompare(bd(b)) || fullName(a).localeCompare(fullName(b), "tr");
   const fns = {
@@ -444,8 +448,8 @@ function sortPeople(list) {
     created_old: (a, b) => String(a.created_at).localeCompare(String(b.created_at)),
     created_new: (a, b) => String(b.created_at).localeCompare(String(a.created_at)),
   };
-  if (S.sort === "family") { const r = familyRank(); return list.slice().sort((a, b) => r.get(a.id) - r.get(b.id)); }
-  return list.slice().sort(fns[S.sort] || fns.alpha);
+  if (key === "family") { const r = familyRank(); return list.slice().sort((a, b) => r.get(a.id) - r.get(b.id)); }
+  return list.slice().sort(fns[key] || fns.alpha);
 }
 function peopleListHtml(list) {
   if (!list.length) return `<p class="muted center">Sonuç yok.</p>`;
@@ -503,6 +507,8 @@ function renderProfile(v) {
     <div class="panel" style="margin-top:1rem"><h2>Önizleme ayarları</h2>
       <p class="muted">Kişinin üzerine gelince açılan önizlemede ve listede hangi bilgiler görünsün? (Bu cihazda saklanır.)</p>
       ${Object.entries(PREF_LABELS).map(([k, t]) => `<label class="check"><input type="checkbox" data-pref="${k}" ${S.prefs[k] ? "checked" : ""}>${t}</label>`).join("")}
+      <label>Açılış ekranı<select data-pref-sel="start"><option value="list" ${S.prefs.start !== "tree" ? "selected" : ""}>Tam kişi listesi</option><option value="tree" ${S.prefs.start === "tree" ? "selected" : ""}>Ağaç</option></select></label>
+      <label>Ağaçtaki kişi seçme listesinin sırası<select data-pref-sel="dropSort">${Object.entries(SORTS).map(([k, t]) => `<option value="${k}" ${S.prefs.dropSort === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
     </div>
     ${me.is_admin ? "" : `<div class="panel" style="margin-top:1rem"><h2>Taleplerim</h2>${myRequestsHtml()}</div>`}
     <div class="panel" style="margin-top:1rem"><h2>📱 Uygulama olarak kullan</h2>
@@ -1335,6 +1341,7 @@ document.addEventListener("change", (e) => {
   else if (t.id === "sortSel") { S.sort = t.value; refreshPeople(); }
   else if (t.id === "bloodMissing") { S.bloodMissing = t.checked; renderView(); }
   else if (t.dataset?.blood !== undefined) changeBlood(t);
+  else if (t.dataset?.prefSel) { S.prefs[t.dataset.prefSel] = t.value; savePrefs(); toast("Kaydedildi"); }
   else if (t.dataset?.pref) { S.prefs[t.dataset.pref] = t.checked; savePrefs(); }
   else if (t.name === "is_deceased") { const b = t.closest("form")?.querySelector(".burialRow"); if (b) b.hidden = !t.checked; }
   else if (t.id === "genOn") { S.gen.on = t.checked; saveGen(); applyBands(); }

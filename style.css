@@ -80,7 +80,9 @@ main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
 .tree ul ul::before { content: ""; position: absolute; top: 0; left: 50%; border-left: 2px solid var(--line); height: 20px; }
 .couple { display: inline-flex; align-items: flex-start; gap: 4px; }
 .partner { display: flex; flex-direction: column; align-items: center; max-width: 140px; }
-.amp { color: var(--muted); font-size: .9rem; padding-top: 1.4rem; }
+.amp { position: relative; align-self: flex-start; width: 38px; height: 4px; margin: 2.1rem 2px 0; background: #c0392b; border-radius: 2px; font-size: 0; }
+.amp::after { content: "♥"; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 22px; height: 22px; line-height: 22px; text-align: center; font-size: .85rem; color: #c0392b; background: var(--card); border: 2px solid #c0392b; border-radius: 50%; }
+.couple:has(.amp) { padding: 5px 7px; border-radius: 16px; box-shadow: 0 0 0 2px rgba(192, 57, 43, .35); background: rgba(255, 255, 255, .25); }
 .pchip { margin-top: 4px; font-size: .7rem; line-height: 1.25; color: var(--muted); text-align: center; }
 .pchip a { color: var(--accent); text-decoration: none; }
 .pchip a:hover { text-decoration: underline; }
