@@ -5,8 +5,8 @@ const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
-const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, prefs: loadPrefs() };
-const startTab = () => (S.prefs.start === "tree" ? "tree" : "people");
+const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, prefs: loadPrefs() };
+const startTab = () => (S.prefs.start === "list" ? "people" : "tree");
 S.tab = startTab();
 const BLOOD = ["A+", "A-", "B+", "B-", "AB+", "AB-", "0+", "0-"];
 const SORTS = { alpha: "Alfabetik (A → Z)", age_old: "Yaşa göre (büyükten küçüğe)", age_young: "Yaşa göre (küçükten büyüğe)", created_old: "Kayıt sırası (ilk eklenen önce)", created_new: "Kayıt sırası (son eklenen önce)", family: "Aile içi sıralama" };
@@ -44,7 +44,7 @@ S.gen = loadGen();
 // Önizleme ayarları (bu cihazda saklanır)
 const PREF_LABELS = { photo: "Fotoğraf (büyütülmüş)", age: "Yaş (yıl ve ay)", city: "Yaşadığı şehir", burial: "Defin yeri (vefat edenler)", blood: "Kan grubu" };
 function loadPrefs() {
-  const d = { photo: true, age: true, city: true, burial: true, blood: true, start: "list", dropSort: "age_old" };
+  const d = { photo: true, age: true, city: true, burial: true, blood: true, start: "tree", dropSort: "age_old" };
   try { Object.assign(d, JSON.parse(localStorage.getItem("soyagaci_prefs") || "{}")); } catch (_) { /* yok sayılır */ }
   return d;
 }
@@ -114,8 +114,8 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toastEl.classList.remove("show"), 3200);
 }
-function showModal(html) {
-  modal.innerHTML = `<div class="sheet"><button type="button" class="x" data-action="closeModal" aria-label="Kapat">×</button>${html}</div>`;
+function showModal(html, cls = "") {
+  modal.innerHTML = `<div class="sheet ${cls}"><button type="button" class="x" data-action="closeModal" aria-label="Kapat">×</button>${html}</div>`;
   modal.classList.add("open");
 }
 function closeModal() {
@@ -332,16 +332,28 @@ function genForm() {
     <div class="actions"><button type="button" class="btn" data-action="genReset">Varsayılana dön</button><button type="button" class="btn primary" data-action="closeModal">Tamam</button></div>`);
 }
 
+// Tüm kişiler: üst kaydı olmayan her kişiden başlayan ağaçlar yan yana
+function forestHtml() {
+  const seen = new Set();
+  const roots = S.people.filter((p) => !p.father_id && !p.mother_id)
+    .sort((a, b) => (!childrenOf([a.id]).length - !childrenOf([b.id]).length) || kidCmp(a, b));
+  S.maxGen = 0;
+  const parts = roots.map((r) => nodeHtml(r.id, seen, true)).filter(Boolean);
+  S.people.forEach((p) => { if (!seen.has(p.id)) parts.push(nodeHtml(p.id, seen, true)); });
+  return `<div class="forest">${parts.filter(Boolean).map((h) => `<ul>${h}</ul>`).join("")}</div>`;
+}
+
 function renderTree(v) {
   if (!S.people.length) {
     v.innerHTML = `<div class="empty"><p>Henüz kimse eklenmemiş.</p>${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">İlk kişiyi ekle</button>` : `<p class="muted">Kişi ekleme yetkisi için yöneticiye başvurun.</p>`}</div>`;
     return;
   }
-  if (!S.rootId || !byId(S.rootId)) S.rootId = defaultRoot();
-  const root = byId(S.rootId);
-  const up = root.father_id || root.mother_id;
+  if (!S.rootId || (S.rootId !== "all" && !byId(S.rootId))) S.rootId = "all";
+  const all = S.rootId === "all";
+  const root = all ? null : byId(S.rootId);
+  const up = root && (root.father_id || root.mother_id);
   v.innerHTML = `<div class="toolbar">
-      <select id="rootSel" aria-label="Başlangıç kişisi">${sortPeople(S.people, S.prefs.dropSort).map((p) => `<option value="${p.id}" ${p.id === S.rootId ? "selected" : ""}>${esc(fullName(p))} ${esc(years(p))}</option>`).join("")}</select>
+      <select id="rootSel" aria-label="Başlangıç kişisi"><option value="all" ${all ? "selected" : ""}>Tüm kişiler (tam ağaç)</option>${sortPeople(S.people, S.prefs.dropSort).map((p) => `<option value="${p.id}" ${p.id === S.rootId ? "selected" : ""}>${esc(fullName(p))} ${esc(years(p))}</option>`).join("")}</select>
       ${up ? `<button type="button" class="btn" data-action="goUp">↑ Üst nesil</button>` : ""}
       ${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">+ Kişi</button>` : ""}
     </div>
@@ -355,10 +367,11 @@ function renderTree(v) {
       <button type="button" class="btn small" data-action="zoomFit">Tümünü sığdır</button>
       <button type="button" class="btn small" data-action="zoomReset">%100</button>
     </div>
-    <div class="tree-wrap"><div class="tree"><ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul></div></div>
+    <div class="tree-wrap"><div class="tree">${all ? forestHtml() : `<ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul>`}</div></div>
     </div>
     <p class="muted hint">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın. Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
   applyBands();
+  if (S.fitPending) { S.fitPending = false; fitZoom(); }
   applyZoom();
 }
 
@@ -383,8 +396,10 @@ function fitZoom() {
   tree.style.minWidth = "0";
   const natural = tree.offsetWidth;
   tree.style.minWidth = "";
-  setZoom(Math.min(1, (wrap.clientWidth - 4) / natural));
+  const naturalH = tree.offsetHeight;
+  setZoom(Math.min(1, (wrap.clientWidth - 4) / natural, (wrap.clientHeight - 4) / naturalH));
   wrap.scrollLeft = 0;
+  wrap.scrollTop = 0;
 }
 
 // ---------- kişiler listesi ----------
@@ -507,7 +522,7 @@ function renderProfile(v) {
     <div class="panel" style="margin-top:1rem"><h2>Önizleme ayarları</h2>
       <p class="muted">Kişinin üzerine gelince açılan önizlemede ve listede hangi bilgiler görünsün? (Bu cihazda saklanır.)</p>
       ${Object.entries(PREF_LABELS).map(([k, t]) => `<label class="check"><input type="checkbox" data-pref="${k}" ${S.prefs[k] ? "checked" : ""}>${t}</label>`).join("")}
-      <label>Açılış ekranı<select data-pref-sel="start"><option value="list" ${S.prefs.start !== "tree" ? "selected" : ""}>Tam kişi listesi</option><option value="tree" ${S.prefs.start === "tree" ? "selected" : ""}>Ağaç</option></select></label>
+      <label>Açılış ekranı<select data-pref-sel="start"><option value="tree" ${S.prefs.start !== "list" ? "selected" : ""}>Ağaç (tüm kişiler, sığdırılmış)</option><option value="list" ${S.prefs.start === "list" ? "selected" : ""}>Kişi listesi</option></select></label>
       <label>Ağaçtaki kişi seçme listesinin sırası<select data-pref-sel="dropSort">${Object.entries(SORTS).map(([k, t]) => `<option value="${k}" ${S.prefs.dropSort === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
     </div>
     ${me.is_admin ? "" : `<div class="panel" style="margin-top:1rem"><h2>Taleplerim</h2>${myRequestsHtml()}</div>`}
@@ -783,7 +798,10 @@ async function saveChange(req) {
     kind: req.kind, person_id: req.person_id || null, payload: req.payload, summary: req.summary,
     requester_name: S.me.full_name || S.me.email,
   }).select().single();
-  if (ins.error) throw ins.error;
+  if (ins.error) {
+    if (/change_requests|schema cache/.test(ins.error.message || "")) throw new Error("Veritabanı güncel değil. Supabase > SQL Editor'de guncelleme.sql dosyasını çalıştırın.");
+    throw ins.error;
+  }
   if (!isAdmin()) return { pending: true };
   const r = await sb.rpc("review_change", { req_id: ins.data.id, approve: true, note: null });
   if (r.error) throw r.error;
@@ -834,9 +852,9 @@ function personForm(p, preset = {}) {
       <label class="burialRow" ${dead ? "" : "hidden"}>Defin yeri (mezar yeri) notu<input name="burial_place" placeholder="Örn. Karacaahmet Mezarlığı, 12. ada" value="${esc(v.burial_place)}"></label>
       <label>Baba<select name="father_id" ${lockParent("father_id") ? "disabled" : ""}>${opt(others.filter((x) => x.gender !== "K"), v.father_id)}</select></label>
       <label>Anne<select name="mother_id" ${lockParent("mother_id") ? "disabled" : ""}>${opt(others.filter((x) => x.gender !== "E"), v.mother_id)}</select></label>
-      <label>Notlar<textarea name="notes" rows="3">${esc(v.notes)}</textarea></label>
+      <label class="full">Notlar<textarea name="notes" rows="2">${esc(v.notes)}</textarea></label>
       <div class="actions"><button type="button" class="btn" data-action="closeModal">Vazgeç</button><button class="btn primary">${isAdmin() ? "Kaydet" : "Onaya gönder"}</button></div>
-    </form>`);
+    </form>`, "wide");
 }
 
 async function submitPerson(f) {
@@ -1293,7 +1311,7 @@ const actions = {
     deferredInstall = null;
     renderView();
   },
-  goUp: () => { const r = byId(S.rootId); S.rootId = r.father_id || r.mother_id || S.rootId; renderView(); },
+  goUp: () => { const r = byId(S.rootId); if (!r) return; S.rootId = r.father_id || r.mother_id || S.rootId; renderView(); },
   addPerson: () => personForm(null),
   editPerson: (id) => personForm(byId(id)),
   deletePerson,
@@ -1333,7 +1351,7 @@ document.addEventListener("submit", async (e) => {
 
 document.addEventListener("change", (e) => {
   const t = e.target;
-  if (t.id === "rootSel") { S.rootId = t.value; renderView(); }
+  if (t.id === "rootSel") { S.rootId = t.value; if (t.value === "all") S.fitPending = true; renderView(); }
   else if (t.id === "fCity") { S.fCity = t.value; refreshPeople(); }
   else if (t.id === "fGender") { S.fGender = t.value; refreshPeople(); }
   else if (t.id === "fStatus") { S.fStatus = t.value; refreshPeople(); }

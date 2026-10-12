@@ -452,3 +452,6 @@ drop policy if exists spouses_insert on public.spouses;
 create policy spouses_insert on public.spouses for insert to authenticated with check (public.is_admin());
 drop policy if exists spouses_delete on public.spouses;
 create policy spouses_delete on public.spouses for delete to authenticated using (public.is_admin());
+
+-- API önbelleğini yenile
+notify pgrst, 'reload schema';
