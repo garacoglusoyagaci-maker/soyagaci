@@ -16,6 +16,12 @@
 - Her kişiye yaşadığı şehir ve "vefat etti" işareti.
 - Ağaçta yakınlaştırma (büyüteç) ve nesillere göre değiştirilebilir yatay zemin renkleri.
 - Telefona uygulama gibi yüklenebilir (PWA), mobil için alt sekme çubuğu.
+- **Onay akışı:** Yönetici dışındakilerin tüm değişiklikleri (düzenleme, kişi/eş ekleme, bilgi notu) talep olarak kaydolur; yönetici **Onaylar** sekmesinden onaylayınca listeye girer.
+- Kişi penceresinde Aile tablosu (baba, anne, eş, kardeş, çocuk), bilgi tablosu, bilgi notları.
+- Vefat edenlerde defin yeri notu ve kartın sağ üst köşesinde hilal işareti.
+- Kan grubu (filtre + toplu giriş ekranı), listede sıralama (alfabetik, yaş, kayıt sırası, aile içi).
+- Fareyle kişinin üzerine gelince önizleme: büyütülmüş fotoğraf, yaş (yıl ve ay), şehir, defin yeri, kan grubu (Profilim > Önizleme ayarları'ndan açılıp kapatılır).
+- Güncelleme duyurusu: onaylanan değişikliklerden hazır "Soyağacı güncellendi" mesajı, kayıtlı e-postalara Gmail/e-posta uygulamasıyla gönderilir.
 
 ## Kurulum
 
@@ -39,12 +45,14 @@
 - Şifre sıfırlama bu sürümde yok. Gerekirse Supabase > Authentication > Users bölümünden yapılır.
 
 ## Güncelleme
-Daha önce kurulum yaptıysanız, yeni dosyaları yüklemeden **önce** Supabase > SQL Editor'de `guncelleme.sql` içeriğini bir kez çalıştırın (şehir, vefat işareti, davetler ve bir güvenlik düzeltmesi içerir). Verileriniz silinmez, tekrar çalıştırmak zararsızdır.
+Daha önce kurulum yaptıysanız, yeni dosyaları yüklemeden **önce** Supabase > SQL Editor'de `guncelleme.sql` içeriğini bir kez çalıştırın (şehir, vefat işareti, davetler, onay akışı, mezar yeri, kan grubu, bilgi notları ve güvenlik düzeltmesi içerir). Verileriniz silinmez, tekrar çalıştırmak zararsızdır.
 
 ## Davet ve yetkiler
 - **Davetler** sekmesi (yönetici): Her kişinin yanına e-posta yazıp Kaydet deyin. O e-postayla kayıt olan kişi otomatik onaylanır ve kendi kartına bağlanır. "Davet gönder" düğmesi hazır mesajı WhatsApp, e-posta ile gönderir ya da kopyalar.
-- **Sadece kendi kaydını düzenler** (varsayılan): Kişi tüm ağacı görür, fotoğraf ekler, ama yalnızca kendi kartını düzenleyebilir. Kişi ekleyemez, başkasını değiştiremez veya silemez.
-- **Kişi de ekleyebilir:** Kişi yeni kişi ekleyebilir. Yalnızca kendi eklediği kişileri ve kendi kartını düzenleyip silebilir.
+- **Kendi kaydı + alt/üst soyu** (varsayılan): Kişi tüm ağacı görür, fotoğraf ekler, bilgi notu paylaşır. Yalnızca kendi kartını düzenleyebilir; kendi atalarına ve altsoyuna kişi (çocuk, kardeş, eş, baba/anne) ekleme önerebilir. Silemez, mevcut ebeveyn bağını değiştiremez.
+- **Tam yetki:** Herkes için düzenleme/ekleme önerebilir. Silme her zaman yalnızca yöneticidedir.
+- Her iki durumda da değişiklikler **yönetici onayına** düşer. Fotoğraf yükleme onaya takılmaz.
+- Otomatik e-posta: statik sitede sunucu olmadığı için "güncellendi" maili otomatik gitmez; Onaylar > "Güncelleme duyurusu hazırla" ile hazır mesaj kendi e-postanızdan gönderilir.
 - Yönetici yalnızca siz (ve atadıklarınız) olursunuz. Kişi-hesap bağlantısını yalnızca yönetici değiştirebilir.
 - Üyeler sekmesinden zaten kayıtlı birini sonradan bir kişiye bağlayabilirsiniz.
 
