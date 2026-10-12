@@ -274,17 +274,38 @@ function parentsChip(id) {
 }
 const partner = (id, withParents) => `<div class="partner">${card(id)}${withParents ? parentsChip(id) : ""}</div>`;
 
-function nodeHtml(id, seen, isRoot = false, depth = 0) {
+// Bir kişinin tüm eşleri (eşinin diğer eşleri de dahil, aynı satırda gösterilir).
+// Tam ağaç görünümünde (patri=true) üst kaydı olmayan bir erkek, kadının ailesinin dalına çekilmez; kendi dalında kalır.
+function spouseGroup(id, seen, patri) {
+  const group = [id];
+  for (let i = 0; i < group.length; i++) {
+    spousesOf(group[i]).forEach((x) => {
+      if (group.includes(x) || seen.has(x) || !byId(x)) return;
+      const hx = byId(x), hp = byId(group[i]);
+      if (patri && hx.gender === "E" && !hx.father_id && !hx.mother_id && (hp.father_id || hp.mother_id)) return;
+      group.push(x);
+    });
+  }
+  return group.slice(1);
+}
+
+function nodeHtml(id, seen, isRoot = false, depth = 0, patri = false) {
   if (seen.has(id)) return "";
   seen.add(id);
   if (depth > S.maxGen) S.maxGen = depth;
-  const sp = spousesOf(id).filter((x) => !seen.has(x) && byId(x));
+  const sp = spouseGroup(id, seen, patri);
   sp.forEach((x) => seen.add(x));
+  const inGroup = new Set([id, ...sp]);
   const kidMap = new Map();
-  childrenOf([id, ...sp]).forEach((k) => { if (!seen.has(k.id)) kidMap.set(k.id, k); });
+  childrenOf([id, ...sp]).forEach((k) => {
+    if (seen.has(k.id)) return;
+    // babası bu satırda değilse ve baba henüz yerleşmediyse çocuk babasının satırında gösterilir
+    if (patri && k.father_id && !inGroup.has(k.father_id) && !seen.has(k.father_id) && byId(k.father_id)) return;
+    kidMap.set(k.id, k);
+  });
   const kids = [...kidMap.values()].sort(kidCmp);
   let h = `<li><div class="couple" data-gen="${depth}">${partner(id, isRoot)}${sp.map((s) => `<span class="amp" title="Eşler" aria-label="Eş">♥</span>${partner(s, true)}`).join("")}</div>`;
-  if (kids.length) h += `<ul>${kids.map((k) => nodeHtml(k.id, seen, false, depth + 1)).join("")}</ul>`;
+  if (kids.length) h += `<ul>${kids.map((k) => nodeHtml(k.id, seen, false, depth + 1, patri)).join("")}</ul>`;
   return h + "</li>";
 }
 
@@ -336,10 +357,10 @@ function genForm() {
 function forestHtml() {
   const seen = new Set();
   const roots = S.people.filter((p) => !p.father_id && !p.mother_id)
-    .sort((a, b) => (!childrenOf([a.id]).length - !childrenOf([b.id]).length) || kidCmp(a, b));
+    .sort((a, b) => (!childrenOf([a.id]).length - !childrenOf([b.id]).length) || ((b.gender === "E") - (a.gender === "E")) || kidCmp(a, b));
   S.maxGen = 0;
-  const parts = roots.map((r) => nodeHtml(r.id, seen, true)).filter(Boolean);
-  S.people.forEach((p) => { if (!seen.has(p.id)) parts.push(nodeHtml(p.id, seen, true)); });
+  const parts = roots.map((r) => nodeHtml(r.id, seen, true, 0, true)).filter(Boolean);
+  S.people.forEach((p) => { if (!seen.has(p.id)) parts.push(nodeHtml(p.id, seen, true, 0, true)); });
   return `<div class="forest">${parts.filter(Boolean).map((h) => `<ul>${h}</ul>`).join("")}</div>`;
 }
 
