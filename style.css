@@ -234,3 +234,16 @@ main.wide { max-width: none; padding-left: .6rem; padding-right: .6rem; }
 }
 .pcard.ref { opacity: .75; border-style: dashed; }
 .pcard.ref small { font-size: .65rem; }
+
+/* benim soyum görünümü */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; flex: none; }
+.seg button { border: 0; background: var(--card); color: var(--text); padding: .5rem .8rem; font: inherit; cursor: pointer; }
+.seg button.on { background: var(--accent); color: var(--accent-text); }
+.toolbar .inl { display: inline-flex; align-items: center; gap: .3rem; margin: 0; font-size: .85rem; color: var(--text); flex: none; }
+.toolbar .inl select { flex: none; min-width: 0; width: auto; }
+.ancwrap { display: flex; flex-direction: column; align-items: center; margin-bottom: 10px; }
+.anclabel { font-size: .7rem; color: var(--muted); margin-bottom: 2px; }
+.couple.ancrow { display: flex; flex-wrap: nowrap; justify-content: center; align-items: flex-start; gap: 10px; }
+.ancarrow { color: var(--line); font-size: 1.3rem; line-height: 1; margin: -2px 0 6px; }
+.ancmore, .more { text-align: center; margin: 4px 0; }
+.toolbar .inl input[type=checkbox] { width: auto; min-width: 0; flex: none; margin: 0; }

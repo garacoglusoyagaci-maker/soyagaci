@@ -21,6 +21,7 @@
 - Vefat edenlerde defin yeri notu ve kartın sağ üst köşesinde hilal işareti.
 - Kan grubu (filtre + toplu giriş ekranı), listede sıralama (alfabetik, yaş, kayıt sırası, aile içi).
 - Fareyle kişinin üzerine gelince önizleme: büyütülmüş fotoğraf, yaş (yıl ve ay), şehir, defin yeri, kan grubu (Profilim > Önizleme ayarları'ndan açılıp kapatılır).
+- **Benim soyum** görünümü: seçilen kişinin atalarını (anne-baba, dede-nine…) ve altsoyunu gösterir; yukarı/aşağı kaç nesil görüneceği ve kardeş/amca/hala gösterimi ayarlanır. Kişiye bağlı üyeler girişte doğrudan kendi soylarıyla açılır, yönetici tüm ağaçla.
 - Güncelleme duyurusu: onaylanan değişikliklerden hazır "Soyağacı güncellendi" mesajı, kayıtlı e-postalara Gmail/e-posta uygulamasıyla gönderilir.
 
 ## Kurulum

@@ -5,7 +5,7 @@ const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
-const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), prefs: loadPrefs() };
+const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), view: "all", focus: null, viewInit: false, depthMax: Infinity, prefs: loadPrefs() };
 const startTab = () => (S.prefs.start === "list" ? "people" : "tree");
 S.tab = startTab();
 const BLOOD = ["A+", "A-", "B+", "B-", "AB+", "AB-", "0+", "0-"];
@@ -44,7 +44,7 @@ S.gen = loadGen();
 // Önizleme ayarları (bu cihazda saklanır)
 const PREF_LABELS = { photo: "Fotoğraf (büyütülmüş)", age: "Yaş (yıl ve ay)", city: "Yaşadığı şehir", burial: "Defin yeri (vefat edenler)", blood: "Kan grubu" };
 function loadPrefs() {
-  const d = { photo: true, age: true, city: true, burial: true, blood: true, start: "tree", dropSort: "age_old" };
+  const d = { photo: true, age: true, city: true, burial: true, blood: true, start: "tree", dropSort: "age_old", treeStart: "auto", up: 3, down: 3, sibs: false };
   try { Object.assign(d, JSON.parse(localStorage.getItem("soyagaci_prefs") || "{}")); } catch (_) { /* yok sayılır */ }
   return d;
 }
@@ -140,14 +140,26 @@ sb.auth.onAuthStateChange((event, session) => {
 
 async function boot(session) {
   if (!session) {
-    Object.assign(S, { user: null, me: null, people: [], spouses: [], profiles: [], tab: startTab(), rootId: null });
+    Object.assign(S, { user: null, me: null, people: [], spouses: [], profiles: [], tab: startTab(), rootId: null, view: "all", focus: null, viewInit: false });
     closeModal();
     renderAuth("login");
     return;
   }
   S.user = session.user;
   await loadAll();
+  initView();
   render();
+}
+
+// Giriş görünümü: üyeler kendi soyuyla, yönetici tüm ağaçla açılır (ayarlardan değiştirilebilir)
+function initView() {
+  if (S.viewInit || !S.me) return;
+  S.viewInit = true;
+  const myP = S.me.person_id && byId(S.me.person_id) ? S.me.person_id : null;
+  const m = S.prefs.treeStart;
+  const mine = m === "mine" || (m !== "all" && !S.me.is_admin);
+  if (mine && myP) { S.view = "lineage"; S.focus = myP; } else S.view = "all";
+  S.fitPending = true;
 }
 
 async function loadAll() {
@@ -314,7 +326,9 @@ function nodeHtml(id, seen, isRoot = false, depth = 0) {
   childrenOf([id, ...sp]).forEach((k) => kidMap.set(k.id, k));
   const kids = [...kidMap.values()].sort(kidCmp);
   let h = `<li><div class="couple" data-gen="${depth}">${partner(id, isRoot)}${sp.map((x) => `<span class="amp" title="Eşler" aria-label="Eş">♥</span>${partner(x, true)}`).join("")}</div>`;
-  if (kids.length) {
+  if (kids.length && depth >= S.depthMax) {
+    h += `<div class="more"><button type="button" class="btn small" data-action="focusOn" data-id="${id}">⤵ ${kids.length} alt kişi…</button></div>`;
+  } else if (kids.length) {
     h += `<ul>${kids.map((k) => (seen.has(k.id) || S.attached.has(k.id) ? refNode(k, depth + 1) : nodeHtml(k.id, seen, false, depth + 1))).join("")}</ul>`;
   }
   return h + "</li>";
@@ -375,19 +389,74 @@ function forestHtml() {
   return `<div class="forest">${parts.filter(Boolean).map((h) => `<ul>${h}</ul>`).join("")}</div>`;
 }
 
+const ancLabel = (lvl) => (lvl === 0 ? "Anne ve baba" : lvl === 1 ? "Dede ve nine" : lvl === 2 ? "Büyük dede ve nine" : `${lvl + 1}. kuşak üst atalar`);
+function ancestorRows(fid, up, sibs) {
+  const rows = [];
+  const placed = new Set([fid]);
+  const walk = (pid, lvl) => {
+    if (lvl >= up) return;
+    const q = byId(pid);
+    if (!q) return;
+    [byId(q.father_id), byId(q.mother_id)].forEach((par) => {
+      if (!par || placed.has(par.id)) return;
+      placed.add(par.id);
+      (rows[lvl] = rows[lvl] || []).push(par);
+      walk(par.id, lvl + 1);
+    });
+  };
+  walk(fid, 0);
+  const last = rows[up - 1];
+  const truncated = !!(last && rows.length === up && last.some((a) => a.father_id || a.mother_id));
+  if (sibs) {
+    rows.forEach((row, i) => {
+      rows[i] = row.flatMap((a) => [a, ...siblingsOf(a).filter((x) => !placed.has(x.id) && placed.add(x.id))]);
+    });
+  }
+  return { rows, truncated };
+}
+function lineageHtml() {
+  const fid = S.focus;
+  const { rows, truncated } = ancestorRows(fid, S.prefs.up, S.prefs.sibs);
+  const n = rows.length;
+  S.depthMax = n + S.prefs.down;
+  let h = truncated ? `<div class="ancmore"><button type="button" class="btn small" data-action="moreUp">↑ Daha üst nesiller var</button></div>` : "";
+  rows.slice().reverse().forEach((row, i) => {
+    h += `<div class="ancwrap"><div class="anclabel">${ancLabel(n - 1 - i)}</div><div class="couple ancrow" data-gen="${i}">${row.map((a) => card(a.id)).join("")}</div></div>`;
+  });
+  if (n) h += `<div class="ancarrow">↓</div>`;
+  const sib = S.prefs.sibs ? siblingsOf(byId(fid)) : [];
+  if (sib.length) h += `<div class="ancwrap"><div class="anclabel">Kardeşler</div><div class="couple ancrow" data-gen="${n}">${sib.map((a) => card(a.id)).join("")}</div></div>`;
+  S.maxGen = n;
+  return h + `<ul>${nodeHtml(fid, new Set(), true, n)}</ul>`;
+}
+
 function renderTree(v) {
   if (!S.people.length) {
     v.innerHTML = `<div class="empty"><p>Henüz kimse eklenmemiş.</p>${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">İlk kişiyi ekle</button>` : `<p class="muted">Kişi ekleme yetkisi için yöneticiye başvurun.</p>`}</div>`;
     return;
   }
+  S.depthMax = Infinity;
+  const myP = S.me?.person_id && byId(S.me.person_id) ? S.me.person_id : null;
+  const lin = S.view === "lineage";
+  if (lin && (!S.focus || !byId(S.focus))) S.focus = myP || defaultRoot();
   if (!S.rootId || (S.rootId !== "all" && !byId(S.rootId))) S.rootId = "all";
-  S.attached = S.rootId === "all" ? buildAttached() : new Map();
+  S.attached = !lin && S.rootId === "all" ? buildAttached() : new Map();
   const all = S.rootId === "all";
   const root = all ? null : byId(S.rootId);
-  const up = root && (root.father_id || root.mother_id);
+  const up = !lin && root && (root.father_id || root.mother_id);
+  const personOpts = (sel) => sortPeople(S.people, S.prefs.dropSort).map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(fullName(p))} ${esc(years(p))}</option>`).join("");
+  const optN = (cur) => [1, 2, 3, 4, 5, 6, 99].map((n) => `<option value="${n}" ${Number(cur) === n ? "selected" : ""}>${n === 99 ? "Hepsi" : n}</option>`).join("");
+  const mid = lin
+    ? `<select id="rootSel" aria-label="Soyu gösterilecek kişi">${personOpts(S.focus)}</select>
+      <label class="inl">Yukarı <select data-lin="up">${optN(S.prefs.up)}</select> nesil</label>
+      <label class="inl">Aşağı <select data-lin="down">${optN(S.prefs.down)}</select> nesil</label>
+      <label class="inl"><input type="checkbox" data-lin="sibs" ${S.prefs.sibs ? "checked" : ""}> Kardeş, amca/hala/dayı/teyze</label>
+      ${myP && S.focus !== myP ? `<button type="button" class="btn" data-action="focusOn" data-id="${myP}">🙋 Bana dön</button>` : ""}`
+    : `<select id="rootSel" aria-label="Başlangıç kişisi"><option value="all" ${all ? "selected" : ""}>Tüm kişiler (tam ağaç)</option>${personOpts(S.rootId)}</select>
+      ${up ? `<button type="button" class="btn" data-action="goUp">↑ Üst nesil</button>` : ""}`;
   v.innerHTML = `<div class="toolbar">
-      <select id="rootSel" aria-label="Başlangıç kişisi"><option value="all" ${all ? "selected" : ""}>Tüm kişiler (tam ağaç)</option>${sortPeople(S.people, S.prefs.dropSort).map((p) => `<option value="${p.id}" ${p.id === S.rootId ? "selected" : ""}>${esc(fullName(p))} ${esc(years(p))}</option>`).join("")}</select>
-      ${up ? `<button type="button" class="btn" data-action="goUp">↑ Üst nesil</button>` : ""}
+      <div class="seg"><button type="button" class="${lin ? "" : "on"}" data-action="setView" data-id="all">🌳 Tüm ağaç</button><button type="button" class="${lin ? "on" : ""}" data-action="setView" data-id="lineage">🧬 ${myP ? "Benim soyum" : "Soy görünümü"}</button></div>
+      ${mid}
       ${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">+ Kişi</button>` : ""}
     </div>
     <div id="treeArea" class="${S.treeFull ? "full" : ""}">
@@ -400,9 +469,9 @@ function renderTree(v) {
       <button type="button" class="btn small" data-action="zoomFit">Tümünü sığdır</button>
       <button type="button" class="btn small" data-action="zoomReset">%100</button>
     </div>
-    <div class="tree-wrap"><div class="tree">${all ? forestHtml() : `<ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul>`}</div></div>
+    <div class="tree-wrap"><div class="tree">${lin ? lineageHtml() : all ? forestHtml() : `<ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul>`}</div></div>
     </div>
-    <p class="muted hint">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın. Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
+    <p class="muted hint">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın (pencerede "🧬 Soyunu göster" ile o kişinin atalarını ve altsoyunu görürsünüz). Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
   applyBands();
   if (S.fitPending) { S.fitPending = false; fitZoom(); }
   applyZoom();
@@ -556,6 +625,7 @@ function renderProfile(v) {
       <p class="muted">Kişinin üzerine gelince açılan önizlemede ve listede hangi bilgiler görünsün? (Bu cihazda saklanır.)</p>
       ${Object.entries(PREF_LABELS).map(([k, t]) => `<label class="check"><input type="checkbox" data-pref="${k}" ${S.prefs[k] ? "checked" : ""}>${t}</label>`).join("")}
       <label>Açılış ekranı<select data-pref-sel="start"><option value="tree" ${S.prefs.start !== "list" ? "selected" : ""}>Ağaç (tüm kişiler, sığdırılmış)</option><option value="list" ${S.prefs.start === "list" ? "selected" : ""}>Kişi listesi</option></select></label>
+      <label>Ağaç sekmesi açılışı<select data-pref-sel="treeStart"><option value="auto" ${S.prefs.treeStart === "auto" ? "selected" : ""}>Otomatik (üyeler kendi soyuyla, yönetici tüm ağaçla)</option><option value="mine" ${S.prefs.treeStart === "mine" ? "selected" : ""}>Her zaman benim soyum</option><option value="all" ${S.prefs.treeStart === "all" ? "selected" : ""}>Her zaman tüm ağaç</option></select></label>
       <label>Ağaçtaki kişi seçme listesinin sırası<select data-pref-sel="dropSort">${Object.entries(SORTS).map(([k, t]) => `<option value="${k}" ${S.prefs.dropSort === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
     </div>
     ${me.is_admin ? "" : `<div class="panel" style="margin-top:1rem"><h2>Taleplerim</h2>${myRequestsHtml()}</div>`}
@@ -791,6 +861,7 @@ async function openPerson(id) {
     ${rels ? `<table class="reltable"><tr class="hd"><th>Yakınlık</th><th>Kişi</th><th>Bilgi</th></tr>${rels}</table>` : `<p class="muted">Henüz bağlı yakını yok.</p>`}
     <div class="actions wrap">
       ${line ? `<button type="button" class="btn" data-action="addChild" data-id="${id}">+ Çocuk</button><button type="button" class="btn" data-action="addSibling" data-id="${id}">+ Kardeş</button><button type="button" class="btn" data-action="addSpouse" data-id="${id}">+ Eş</button>` : ""}
+      <button type="button" class="btn" data-action="focusOn" data-id="${id}">🧬 Soyunu göster</button>
       ${canEditPerson(p) ? `<button type="button" class="btn" data-action="editPerson" data-id="${id}">Düzenle</button>` : ""}
       ${canDeletePerson() ? `<button type="button" class="btn danger" data-action="deletePerson" data-id="${id}">Sil</button>` : ""}
     </div>
@@ -1301,6 +1372,14 @@ const actions = {
     await loadAll();
     openPerson(el.dataset.person);
   },
+  setView: (mode) => {
+    S.view = mode === "lineage" ? "lineage" : "all";
+    if (S.view === "lineage" && (!S.focus || !byId(S.focus))) S.focus = S.me?.person_id && byId(S.me.person_id) ? S.me.person_id : defaultRoot();
+    S.fitPending = true;
+    renderView();
+  },
+  focusOn: (id) => { S.view = "lineage"; S.focus = id; S.fitPending = true; S.tab = "tree"; closeModal(); render(); },
+  moreUp: () => { S.prefs.up = Math.min(99, Number(S.prefs.up) + 1); savePrefs(); S.fitPending = true; renderView(); },
   bloodScreen: () => { S.tab = "blood"; render(); },
   approveReq: async (id) => { if (await reviewReq(id, true)) { toast("Onaylandı"); await afterReview(); } },
   rejectReq: async (id) => {
@@ -1384,7 +1463,12 @@ document.addEventListener("submit", async (e) => {
 
 document.addEventListener("change", (e) => {
   const t = e.target;
-  if (t.id === "rootSel") { S.rootId = t.value; if (t.value === "all") S.fitPending = true; renderView(); }
+  if (t.id === "rootSel") {
+    if (S.view === "lineage") { S.focus = t.value; S.fitPending = true; }
+    else { S.rootId = t.value; if (t.value === "all") S.fitPending = true; }
+    renderView();
+  }
+  else if (t.dataset?.lin) { S.prefs[t.dataset.lin] = t.type === "checkbox" ? t.checked : Number(t.value); savePrefs(); S.fitPending = true; renderView(); }
   else if (t.id === "fCity") { S.fCity = t.value; refreshPeople(); }
   else if (t.id === "fGender") { S.fGender = t.value; refreshPeople(); }
   else if (t.id === "fStatus") { S.fStatus = t.value; refreshPeople(); }
