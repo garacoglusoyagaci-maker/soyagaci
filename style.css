@@ -232,3 +232,5 @@ main.wide { max-width: none; padding-left: .6rem; padding-right: .6rem; }
   .sheet.wide form[data-form=person] label.check { align-self: end; margin-bottom: .75rem; }
   .sheet.wide form[data-form=person] .burialRow, .sheet.wide form[data-form=person] label.full, .sheet.wide form[data-form=person] .actions { grid-column: 1 / -1; }
 }
+.pcard.ref { opacity: .75; border-style: dashed; }
+.pcard.ref small { font-size: .65rem; }
