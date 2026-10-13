@@ -22,6 +22,7 @@
 - Kan grubu (filtre + toplu giriş ekranı), listede sıralama (alfabetik, yaş, kayıt sırası, aile içi).
 - Fareyle kişinin üzerine gelince önizleme: büyütülmüş fotoğraf, yaş (yıl ve ay), şehir, defin yeri, kan grubu (Profilim > Önizleme ayarları'ndan açılıp kapatılır).
 - **Benim soyum** görünümü: seçilen kişinin atalarını (anne-baba, dede-nine…) ve altsoyunu gösterir; yukarı/aşağı kaç nesil görüneceği ve kardeş/amca/hala gösterimi ayarlanır. Kişiye bağlı üyeler girişte doğrudan kendi soylarıyla açılır, yönetici tüm ağaçla.
+- Yedekleme sekmesi, yönetici bildirimleri ve silme kuralları: aşağıdaki "Güncelleme 2" bölümüne bakın.
 - Güncelleme duyurusu: onaylanan değişikliklerden hazır "Soyağacı güncellendi" mesajı, kayıtlı e-postalara Gmail/e-posta uygulamasıyla gönderilir.
 
 ## Kurulum
@@ -45,7 +46,40 @@
 - `anon` anahtarı herkese açık olabilir, güvenliği `schema.sql` içindeki kurallar sağlar. `service_role` anahtarını **asla** koda koyma.
 - Şifre sıfırlama bu sürümde yok. Gerekirse Supabase > Authentication > Users bölümünden yapılır.
 
-## Güncelleme
+## Güncelleme 2 (anında ekleme, silme kuralları, yedekleme, bildirimler)
+**Önce** Supabase > SQL Editor'de `guncelleme2.sql` dosyasını bir kez çalıştırın (tekrar çalıştırmak zararsızdır; verileriniz silinmez), sonra yeni dosyaları GitHub'a yükleyin (`index.html`, `app.js`, `style.css`, `sw.js`, `config.js` ve isterseniz diğerleri). `config.js` içindeki kendi Supabase adresinizi/anahtarınızı koruyun; yalnızca en alttaki `VAPID_PUBLIC_KEY` satırı yenidir.
+
+### Kurallar (veritabanında zorlanır)
+- **Tam yetkili üye** eklediği kişi/eşi **kendi hesabında anında** görür (⏳ "onay bekliyor" işaretiyle). Diğer üyeler, yönetici **Onaylar** sekmesinden onaylayınca görür. Reddedilirse kayıt kaldırılır. Kişiyi eklediği için henüz yayınlanmamışsa üye onu doğrudan düzenleyebilir.
+- Kendi kaydı + alt/üst soyu yetkisindeki üyelerin ekleme/düzenlemeleri eskisi gibi onay bekler, onaylanana dek kimse görmez.
+- **Başka kullanıcının eklediği kaydı kimse silemez** (yönetici dahil). Başkasının kaydına bilgi notu eklenebilir ya da düzenleme önerilebilir.
+- **Ekleyen kişi, eklediği kaydı ilk 5 dakika içinde hemen silebilir** (kişi, eşlik, bilgi notu, fotoğraf). 5 dakikadan sonra "Silme talebi" gönderilir; yönetici **Onaylar** sekmesinde tek tek onaylar. Onay bekleyen (henüz yayınlanmamış) kayıt süre sınırı olmadan geri çekilebilir. Başkalarının eklediği çocuk/not/fotoğraf bağlıysa kişi hemen silinmez, talep olur.
+- **Toplu silme kapalı:** Bir SQL ifadesi 1'den fazla kayıt silemez, tablolar boşaltılamaz (`TRUNCATE` yasak), tarayıcıdan/API'den doğrudan silme yoktur; silmeler yalnızca kurallı fonksiyonlardan geçer. Silinen her kaydın tam yedeği `deletion_log` tablosunda ve **Yedek** sekmesindeki "Silme günlüğü"nde durur.
+- Not: Sahibi artık olmayan (hesabı silinmiş üyenin eklediği) kayıtları yalnızca yönetici silebilir. Gerçekten toplu temizlik gerekirse Supabase'de ilgili tetikleyiciyi (`no_bulk_delete`) bilinçli olarak devre dışı bırakmanız gerekir.
+
+### Yedekleme (yalnızca yönetici, "💾 Yedek" sekmesi)
+- **Kişi verisi:** JSON (tam yedek) ve CSV (Excel). **Yazılım:** sitedeki dosyaların ZIP'i. İkisi de doğrudan indirilir, kurulum gerekmez.
+- **E-postayla gönderme** için bir kez kurulum (ücretsiz, Gmail ile):
+  1. Gmail hesabınızda 2 adımlı doğrulamayı açın, Google Hesabı > Güvenlik > **Uygulama şifreleri**'nden bir şifre üretin.
+  2. Supabase CLI ile (bilgisayarınızda bir kez): `supabase login`, `supabase link --project-ref <proje-id>`,
+     `supabase secrets set SMTP_USER=siz@gmail.com SMTP_PASS=<uygulama-şifresi>`,
+     `supabase functions deploy send-backup`
+     (CLI kullanmak istemezseniz Supabase > Edge Functions > *Deploy a new function* ile `supabase/functions/send-backup/index.ts` içeriğini yapıştırıp Secrets bölümüne aynı iki değeri girin).
+  3. Uygulamada **Yedek** sekmesinde alıcıları ekleyin, önce **Test e-postası gönder**'i deneyin.
+  Gmail yerine Resend kullanmak isterseniz `RESEND_API_KEY` ve `MAIL_FROM` secret'larını tanımlayın.
+- Yedeğe fotoğraf dosyaları girmez. E-posta ekleri gizli aile taraflarını da içerir; alıcıları buna göre seçin.
+
+### Yönetici bildirimleri (telefonda bildirim)
+Yönetici onayına düşen her şey (yeni kişi/eş/not, düzenleme, silme talebi, yeni üye) telefona bildirim olarak gelir; uygulama açıkken ayrıca anında uyarı ve uygulama simgesinde sayı rozeti görünür.
+1. Anahtar üretin (bilgisayarda bir kez): `npx web-push generate-vapid-keys`
+2. **Genel** anahtarı `config.js` içindeki `VAPID_PUBLIC_KEY` satırına yazın ve siteyi yeniden yükleyin.
+3. `supabase secrets set VAPID_PUBLIC_KEY=<genel> VAPID_PRIVATE_KEY=<özel> VAPID_SUBJECT=mailto:siz@gmail.com` ve `supabase functions deploy notify-admin`. Özel anahtarı asla `config.js`'e veya GitHub'a koymayın.
+4. Telefonda siteyi uygulama olarak yükleyin (iPhone: Safari > Paylaş > Ana Ekrana Ekle, iOS 16.4+), yönetici olarak girin, **Profilim > Yönetici bildirimleri > Bildirimleri aç** deyin ve **Test bildirimi gönder** ile deneyin.
+
+### Soy görünümü
+"Benim soyum"da atalar satırlarında eşler artık yan yana ve ♥ ile evli gösterilir (ör. Aslan ♥ Mevlüde, Ali ♥ Zeyne Karaman). "Kardeş, amca/hala" açıkken seçilen kişinin kardeşleri kendisiyle aynı satırda, büyükler solda küçükler sağda görünür.
+
+## Güncelleme (eski)
 Daha önce kurulum yaptıysanız, yeni dosyaları yüklemeden **önce** Supabase > SQL Editor'de `guncelleme.sql` içeriğini bir kez çalıştırın (şehir, vefat işareti, davetler, onay akışı, mezar yeri, kan grubu, bilgi notları ve güvenlik düzeltmesi içerir). Verileriniz silinmez, tekrar çalıştırmak zararsızdır.
 
 ## Davet ve yetkiler

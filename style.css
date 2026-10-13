@@ -243,7 +243,10 @@ main.wide { max-width: none; padding-left: .6rem; padding-right: .6rem; }
 .toolbar .inl select { flex: none; min-width: 0; width: auto; }
 .ancwrap { display: flex; flex-direction: column; align-items: center; margin-bottom: 10px; }
 .anclabel { font-size: .7rem; color: var(--muted); margin-bottom: 2px; }
-.couple.ancrow { display: flex; flex-wrap: nowrap; justify-content: center; align-items: flex-start; gap: 10px; }
+.ancrow { display: flex; flex-wrap: nowrap; justify-content: center; align-items: flex-start; gap: 10px; }
+.focusline { display: flex; align-items: flex-start; justify-content: center; gap: 10px; }
+.sibgrp { display: flex; align-items: flex-start; gap: 10px; }
+.pcard.ghost { visibility: hidden; width: 110px; min-height: 1px; padding: 0; border: 0; }
 .ancarrow { color: var(--line); font-size: 1.3rem; line-height: 1; margin: -2px 0 6px; }
 .ancmore, .more { text-align: center; margin: 4px 0; }
 .toolbar .inl input[type=checkbox] { width: auto; min-width: 0; flex: none; margin: 0; }
@@ -252,3 +255,8 @@ main.wide { max-width: none; padding-left: .6rem; padding-right: .6rem; }
 .pcard .lk { position: absolute; bottom: 3px; right: 5px; font-size: .7rem; line-height: 1; }
 .hiddenbar { margin: .4rem 0; padding: .35rem .6rem; border-radius: 8px; background: var(--card); border: 1px dashed var(--border); font-size: .85rem; }
 select[data-side] { width: 100%; }
+
+/* ---------- onay bekleyen kayıtlar, silme talepleri ---------- */
+.pcard.pend { border: 2px dotted #e0a800; }
+.pcard .pk { position: absolute; bottom: 3px; left: 5px; font-size: .75rem; line-height: 1; }
+.req.del { border-left: 4px solid var(--danger); }

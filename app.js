@@ -1,11 +1,13 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
+import * as CFG from "./config.js";
+const SUPABASE_URL = CFG.SUPABASE_URL, SUPABASE_ANON_KEY = CFG.SUPABASE_ANON_KEY;
+const VAPID_PUBLIC_KEY = CFG.VAPID_PUBLIC_KEY || ""; // bildirimler için (isteğe bağlı, README'ye bakın)
 
 const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
-const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), view: "all", focus: null, viewInit: false, depthMax: Infinity, prefs: loadPrefs() };
+const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), view: "all", focus: null, viewInit: false, depthMax: Infinity, recipients: [], blog: [], dlog: [], backupBusy: false, prefs: loadPrefs() };
 const startTab = () => (S.prefs.start === "list" ? "people" : "tree");
 S.tab = startTab();
 const BLOOD = ["A+", "A-", "B+", "B-", "AB+", "AB-", "0+", "0-"];
@@ -103,8 +105,19 @@ function lineage() {
 }
 const inLine = (id) => { if (isFull()) return true; const l = lineage(); return !!l.me && (id === l.me || l.anc.has(id) || l.desc.has(id)); };
 const canEditPerson = (p) => isFull() || (!!S.me && S.me.person_id === p.id);
-const canDeletePerson = () => isAdmin();
-const canDelSpouse = () => isAdmin();
+// Silme kuralı: yalnızca kaydı ekleyen siler (sahibi olmayan kayıtlar için yönetici). İlk 5 dakika hemen, sonra yönetici onayıyla.
+const FIVE_MIN = 5 * 60 * 1000;
+const isMine = (uid) => !!uid && !!S.user && uid === S.user.id;
+const ownerOk = (uid) => isMine(uid) || (!uid && isAdmin());
+const isPending = (x) => !!x && x.approval === "pending";
+const graceLeft = (row) => FIVE_MIN - (Date.now() - new Date(row.created_at).getTime());
+const instantNow = (row) => isPending(row) || graceLeft(row) > 0;
+const canDeletePerson = (p) => ownerOk(p.created_by);
+const canDelSpouse = (s) => ownerOk(s.created_by);
+const instantAdd = () => !isAdmin() && isFull(); // tam yetkili üye: eklediği kayıt hemen kendi ekranında görünür
+const dbOld = (e) => (/add_person_pending|add_spouse_pending|request_delete|withdraw_request|edit_pending_person|admin_export|schema cache/.test(e?.message || "") ? new Error("Veritabanı güncel değil. Supabase > SQL Editor'de guncelleme2.sql dosyasını çalıştırın.") : e);
+// Yönetici onayına düşen işlemi yöneticinin telefonuna bildir (Edge Function; kurulmamışsa sessizce geçilir)
+function notifyAdmin(body) { if (isAdmin()) return; try { Promise.resolve(sb.functions.invoke("notify-admin", { body })).catch(() => {}); } catch (_) { /* yok sayılır */ } }
 const canAddParent = (p, role) => !(role === "father" ? p.father_id || p._hfather_id : p.mother_id || p._hmother_id) && inLine(p.id);
 
 // Aile tarafı görünürlüğü (kişinin ebeveyn tarafı diğer üyelere ne kadar görünsün)
@@ -166,6 +179,7 @@ sb.auth.onAuthStateChange((event, session) => {
 async function boot(session) {
   if (!session) {
     Object.assign(S, { user: null, me: null, people: [], spouses: [], profiles: [], tab: startTab(), rootId: null, view: "all", focus: null, viewInit: false });
+    stopWatch();
     closeModal();
     renderAuth("login");
     return;
@@ -173,7 +187,9 @@ async function boot(session) {
   S.user = session.user;
   await loadAll();
   initView();
+  if (S.me?.is_admin && /approvals/.test(location.hash)) S.tab = "approvals"; // bildirime dokunulunca gelinen yer
   render();
+  startWatch();
 }
 
 // Giriş görünümü: üyeler kendi soyuyla, yönetici tüm ağaçla açılır (ayarlardan değiştirilebilir)
@@ -203,6 +219,11 @@ async function loadAll() {
   if (pr.error) toast("Veri yüklenemedi: " + pr.error.message);
   S.profiles = pr.data || [];
   S.people = pe.data || [];
+  // Onay bekleyen "baba/anne ekle" kayıtları: bağ, kaydı gören (ekleyen ve yönetici) kişiye hemen yansır
+  S.people.forEach((x) => {
+    if (!isPending(x)) return;
+    [["pend_father_of", "father_id"], ["pend_mother_of", "mother_id"]].forEach(([pk, fk]) => { const t = x[pk] && byId(x[pk]); if (t && !t[fk]) t[fk] = x.id; });
+  });
   // Gizli tarafa giden ebeveyn bağları bu kullanıcıya kapalıdır: kişi ağaçta kayıp görünmesin diye bağı boş sayarız
   const seenIds = new Set(S.people.map((x) => x.id));
   S.people.forEach((x) => ["father_id", "mother_id"].forEach((k) => { if (x[k] && !seenIds.has(x[k])) { x["_h" + k] = true; x[k] = null; } }));
@@ -213,6 +234,14 @@ async function loadAll() {
     const iv = await sb.from("invites").select("*");
     if (iv.error) toast("Davetler yüklenemedi (guncelleme.sql çalıştırıldı mı?): " + iv.error.message);
     else S.invites = iv.data || [];
+    const [rc, bl, dl] = await Promise.all([
+      sb.from("backup_recipients").select("*").order("created_at"),
+      sb.from("backup_log").select("*").order("created_at", { ascending: false }).limit(15),
+      sb.from("deletion_log").select("id,kind,label,deleted_by,mode,created_at").order("created_at", { ascending: false }).limit(20),
+    ]);
+    S.recipients = rc.data || [];
+    S.blog = bl.data || [];
+    S.dlog = dl.data || [];
   }
 }
 
@@ -243,6 +272,7 @@ async function submitAuth(f) {
     const { data, error } = await sb.auth.signUp({ email, password, options: { data: { full_name: f.elements.full_name.value.trim() } } });
     if (error) { msg.textContent = error.message; btn.disabled = false; return; }
     if (!data.session) { msg.textContent = "Kayıt alındı ancak oturum açılamadı. Yönetici Supabase'de e-posta onayını kapatmalı."; btn.disabled = false; }
+    else try { Promise.resolve(sb.functions.invoke("notify-admin", { body: { type: "signup" } })).catch(() => {}); } catch (_) { /* yok sayılır */ }
   } else {
     const { error } = await sb.auth.signInWithPassword({ email, password });
     if (error) { msg.textContent = "E-posta veya şifre hatalı."; btn.disabled = false; }
@@ -250,6 +280,18 @@ async function submitAuth(f) {
 }
 
 // ---------- ana ekran ----------
+function navHtml() {
+  const tabs = [["tree", "🌳", "Ağaç"], ["people", "👥", "Kişiler"], ["profile", "👤", "Profilim"]];
+  if (S.me.is_admin) {
+    const waiting = S.profiles.filter((p) => !p.approved).length;
+    const pend = S.requests.filter((r) => r.status === "pending").length;
+    tabs.push(["approvals", "✅", "Onaylar" + (pend ? ` (${pend})` : "")]);
+    tabs.push(["invites", "✉️", "Davetler"]);
+    tabs.push(["members", "⚙️", "Üyeler" + (waiting ? ` (${waiting})` : "")]);
+    tabs.push(["backup", "💾", "Yedek"]);
+  }
+  return tabs.map(([k, ic, t]) => `<button type="button" class="${S.tab === k ? "on" : ""}" data-action="tab" data-id="${k}"><span class="ic">${ic}</span><span class="tl">${t}</span></button>`).join("");
+}
 function render() {
   if (!S.me) {
     app.innerHTML = `<div class="auth"><p>Profil yüklenemedi.</p><button class="btn" data-action="logout">Çıkış</button></div>`;
@@ -262,17 +304,9 @@ function render() {
       <button class="link" data-action="logout">Çıkış</button></div>`;
     return;
   }
-  const tabs = [["tree", "🌳", "Ağaç"], ["people", "👥", "Kişiler"], ["profile", "👤", "Profilim"]];
-  if (S.me.is_admin) {
-    const waiting = S.profiles.filter((p) => !p.approved).length;
-    const pend = S.requests.filter((r) => r.status === "pending").length;
-    tabs.push(["approvals", "✅", "Onaylar" + (pend ? ` (${pend})` : "")]);
-    tabs.push(["invites", "✉️", "Davetler"]);
-    tabs.push(["members", "⚙️", "Üyeler" + (waiting ? ` (${waiting})` : "")]);
-  }
   app.innerHTML = `<header class="top">
       <div class="brand">🌳 Soyağacı</div>
-      <nav>${tabs.map(([k, ic, t]) => `<button type="button" class="${S.tab === k ? "on" : ""}" data-action="tab" data-id="${k}"><span class="ic">${ic}</span><span class="tl">${t}</span></button>`).join("")}</nav>
+      <nav>${navHtml()}</nav>
       <div class="user">${esc(S.me.full_name || S.me.email)} <button type="button" class="link" data-action="logout">Çıkış</button></div>
     </header><main id="view"></main>`;
   renderView();
@@ -283,11 +317,12 @@ function renderView() {
   v.classList.toggle("wide", S.tab === "tree"); // ağaç sekmesi tüm genişliği kullanır
   if (S.tab === "tree") renderTree(v);
   else if (S.tab === "people") renderPeople(v);
-  else if (S.tab === "profile") renderProfile(v);
+  else if (S.tab === "profile") { renderProfile(v); if (S.me.is_admin) updatePushBox(); }
   else if (S.tab === "members") renderMembers(v);
   else if (S.tab === "invites") renderInvites(v);
   else if (S.tab === "approvals") renderApprovals(v);
   else if (S.tab === "blood") renderBlood(v);
+  else if (S.tab === "backup") renderBackup(v);
 }
 
 // ---------- ağaç ----------
@@ -299,7 +334,7 @@ function defaultRoot() {
 function card(id) {
   const p = byId(id);
   if (!p) return "";
-  return `<button type="button" class="pcard ${genderCls(p)}${isDead(p) ? " dead" : ""}" data-action="open" data-id="${id}">
+  return `<button type="button" class="pcard ${genderCls(p)}${isDead(p) ? " dead" : ""}${isPending(p) ? " pend" : ""}" data-action="open" data-id="${id}">${isPending(p) ? `<span class="pk" title="Yönetici onayı bekliyor: şu an yalnızca siz ve yönetici görüyorsunuz">⏳</span>` : ""}
     ${isDead(p) ? `<span class="dm" title="Vefat etti. Allah rahmet eylesin">&#9770;&#xFE0E;</span>` : ""}${S.photoSet.has(id) ? `<span class="cm" title="Fotoğraf var">📷</span>` : ""}${p.hidden_for ? `<span class="lk" title="${esc(hiddenLabel(p))}">🔒</span>` : ""}
     <span class="av">${esc((p.first_name || "?")[0])}</span><span class="nm">${esc(fullName(p))}</span><small>${esc(years(p))}</small></button>`;
 }
@@ -344,7 +379,7 @@ function refNode(k, depth) {
     <span class="av">${esc((k.first_name || "?")[0])}</span><span class="nm">${esc(fullName(k))}</span><small>↗ eşiyle birlikte başka yerde</small></button></div></div></li>`;
 }
 
-function nodeHtml(id, seen, isRoot = false, depth = 0) {
+function nodeHtml(id, seen, isRoot = false, depth = 0, side = null) {
   if (seen.has(id)) return "";
   seen.add(id);
   if (depth > S.maxGen) S.maxGen = depth;
@@ -353,7 +388,7 @@ function nodeHtml(id, seen, isRoot = false, depth = 0) {
   const kidMap = new Map();
   childrenOf([id, ...sp]).forEach((k) => kidMap.set(k.id, k));
   const kids = [...kidMap.values()].sort(kidCmp);
-  let h = `<li><div class="couple" data-gen="${depth}">${partner(id, isRoot)}${sp.map((x) => `<span class="amp" title="Eşler" aria-label="Eş">♥</span>${partner(x, true)}`).join("")}</div>`;
+  let h = `<li>${side ? `<div class="focusline">${side.left}` : ""}<div class="couple" data-gen="${depth}">${partner(id, isRoot)}${sp.map((x) => `<span class="amp" title="Eşler" aria-label="Eş">♥</span>${partner(x, true)}`).join("")}</div>${side ? `${side.right}</div>` : ""}`;
   if (kids.length && depth >= S.depthMax) {
     h += `<div class="more"><button type="button" class="btn small" data-action="focusOn" data-id="${id}">⤵ ${kids.length} alt kişi…</button></div>`;
   } else if (kids.length) {
@@ -372,7 +407,7 @@ function applyBands() {
   tree.style.zoom = 1; // ölçümü gerçek boyutta yap
   const base = tree.getBoundingClientRect().top;
   const rows = new Map();
-  tree.querySelectorAll(".couple[data-gen]").forEach((c) => {
+  tree.querySelectorAll(".couple[data-gen], .ancrow[data-gen]").forEach((c) => {
     const g = Number(c.dataset.gen);
     const r = c.getBoundingClientRect();
     const cur = rows.get(g) || { top: Infinity, bottom: -Infinity };
@@ -435,27 +470,69 @@ function ancestorRows(fid, up, sibs) {
   walk(fid, 0);
   const last = rows[up - 1];
   const truncated = !!(last && rows.length === up && last.some((a) => a.father_id || a.mother_id));
+  const extra = new Set(); // kardeş / amca / hala olarak eklenenler
   if (sibs) {
     rows.forEach((row, i) => {
-      rows[i] = row.flatMap((a) => [a, ...siblingsOf(a).filter((x) => !placed.has(x.id) && placed.add(x.id))]);
+      rows[i] = row.flatMap((a) => [a, ...siblingsOf(a).filter((x) => !placed.has(x.id) && placed.add(x.id) && extra.add(x.id))]);
     });
   }
-  return { rows, truncated };
+  return { rows, truncated, extra };
 }
+// Bir satırdaki kişileri evli çiftler halinde grupla (eşler yan yana, aralarında ♥). Çiftler kan bağı sırasını korur.
+function coupleUnits(list, extra, used) {
+  const inList = new Set(list.map((x) => x.id));
+  const placed = new Set();
+  const units = [];
+  list.forEach((x) => {
+    if (placed.has(x.id)) return;
+    placed.add(x.id);
+    const u = [x];
+    spousesOf(x.id).forEach((sid) => {
+      const o = byId(sid);
+      if (!o || placed.has(sid)) return;
+      if (inList.has(sid) || (extra.has(x.id) && !used.has(sid))) { placed.add(sid); used.add(sid); u.push(o); }
+    });
+    if (u.length === 2 && u[0].gender !== "E" && u[1].gender === "E") u.reverse();
+    units.push(u);
+  });
+  return units;
+}
+const unitHtml = (u) => (u.length === 1 ? partner(u[0].id, false) : `<div class="couple">${u.map((x, i) => (i ? `<span class="amp" title="Eşler" aria-label="Eş">♥</span>` : "") + partner(x.id, false)).join("")}</div>`);
+const ghostCards = (n) => Array.from({ length: Math.max(0, n) }, () => `<span class="pcard ghost" aria-hidden="true"></span>`).join("");
+
 function lineageHtml() {
   const fid = S.focus;
-  const { rows, truncated } = ancestorRows(fid, S.prefs.up, S.prefs.sibs);
+  const { rows, truncated, extra } = ancestorRows(fid, S.prefs.up, S.prefs.sibs);
   const n = rows.length;
   S.depthMax = n + S.prefs.down;
+  const used = new Set([fid, ...spousesOf(fid)]);
+  rows.forEach((r) => r.forEach((x) => used.add(x.id)));
   let h = truncated ? `<div class="ancmore"><button type="button" class="btn small" data-action="moreUp">↑ Daha üst nesiller var</button></div>` : "";
   rows.slice().reverse().forEach((row, i) => {
-    h += `<div class="ancwrap"><div class="anclabel">${ancLabel(n - 1 - i)}</div><div class="couple ancrow" data-gen="${i}">${row.map((a) => card(a.id)).join("")}</div></div>`;
+    const units = coupleUnits(row, extra, used);
+    h += `<div class="ancwrap"><div class="anclabel">${ancLabel(n - 1 - i)}</div><div class="ancrow" data-gen="${i}">${units.map(unitHtml).join("")}</div></div>`;
   });
   if (n) h += `<div class="ancarrow">↓</div>`;
-  const sib = S.prefs.sibs ? siblingsOf(byId(fid)) : [];
-  if (sib.length) h += `<div class="ancwrap"><div class="anclabel">Kardeşler</div><div class="couple ancrow" data-gen="${n}">${sib.map((a) => card(a.id)).join("")}</div></div>`;
+  // Kardeşler, seçilen kişiyle aynı satırda: büyükler solda, küçükler sağda (kişi hep ortada kalsın diye karşı tarafa görünmez boşluk eklenir)
+  let side = null;
+  if (S.prefs.sibs) {
+    const sibs = siblingsOf(byId(fid));
+    if (sibs.length) {
+      const order = [...sibs, byId(fid)].sort(kidCmp);
+      const at = order.findIndex((x) => x.id === fid);
+      const sibIds = new Set(sibs.map((x) => x.id));
+      sibs.forEach((x) => used.add(x.id));
+      const mk = (list) => coupleUnits(list, sibIds, used);
+      const L = mk(order.slice(0, at)), R = mk(order.slice(at + 1));
+      const cnt = (us) => us.reduce((a, u) => a + u.length, 0);
+      side = {
+        left: `<div class="sibgrp">${ghostCards(cnt(R) - cnt(L))}${L.map(unitHtml).join("")}</div>`,
+        right: `<div class="sibgrp">${R.map(unitHtml).join("")}${ghostCards(cnt(L) - cnt(R))}</div>`,
+      };
+    }
+  }
   S.maxGen = n;
-  return h + `<ul>${nodeHtml(fid, new Set(), true, n)}</ul>`;
+  return h + `<ul>${nodeHtml(fid, new Set(), true, n, side)}</ul>`;
 }
 
 function renderTree(v) {
@@ -599,7 +676,7 @@ function sortPeople(list, key = S.sort) {
 function peopleListHtml(list) {
   if (!list.length) return `<p class="muted center">Sonuç yok.</p>`;
   return sortPeople(list)
-    .map((p) => { const bits = previewBits(p); return `<button type="button" data-action="open" data-id="${p.id}"><span>${S.photoSet.has(p.id) ? "📷 " : ""}${p.hidden_for ? "🔒 " : ""}${esc(fullName(p))}${bits.length ? `<small class="city">${esc(bits.join(" · "))}</small>` : ""}</span><span class="muted">${esc(years(p))}</span></button>`; })
+    .map((p) => { const bits = previewBits(p); return `<button type="button" data-action="open" data-id="${p.id}"><span>${isPending(p) ? "⏳ " : ""}${S.photoSet.has(p.id) ? "📷 " : ""}${p.hidden_for ? "🔒 " : ""}${esc(fullName(p))}${bits.length ? `<small class="city">${esc(bits.join(" · "))}</small>` : ""}</span><span class="muted">${esc(years(p))}</span></button>`; })
     .join("");
 }
 
@@ -646,7 +723,7 @@ function renderProfile(v) {
       <label>E-posta<input value="${esc(me.email)}" disabled></label>
       <label>Ad Soyad<input name="full_name" required value="${esc(me.full_name)}"></label>
       <p class="muted">Ağaçtaki kişim: <b>${me.person_id && byId(me.person_id) ? esc(fullName(byId(me.person_id))) : "henüz bağlı değil (yöneticiye söyleyin)"}</b></p>
-      <p class="muted">Yetkiniz: ${me.is_admin ? "Yönetici (değişiklikler doğrudan uygulanır)" : me.can_add ? "Tam yetki: herkes için değişiklik önerebilir (yönetici onayına düşer)" : me.person_id ? "Kendi kaydını düzenleyebilir, kendi alt/üst soyuna ekleme önerebilir, bilgi notu paylaşabilir (yönetici onayına düşer)" : "Görüntüleme, bilgi notu ve fotoğraf ekleme"}</p>
+      <p class="muted">Yetkiniz: ${me.is_admin ? "Yönetici (değişiklikler doğrudan uygulanır)" : me.can_add ? "Tam yetki: eklediğiniz kişiler hemen sizde görünür, diğer üyeler yönetici onayından sonra görür; diğer değişiklikler yönetici onayına düşer" : me.person_id ? "Kendi kaydını düzenleyebilir, kendi alt/üst soyuna ekleme önerebilir, bilgi notu paylaşabilir (yönetici onayına düşer)" : "Görüntüleme, bilgi notu ve fotoğraf ekleme"}</p>
       <div class="actions"><button class="btn primary">Kaydet</button></div>
     </form></div>
     <div class="panel" style="margin-top:1rem"><h2>Önizleme ayarları</h2>
@@ -656,7 +733,7 @@ function renderProfile(v) {
       <label>Ağaç sekmesi açılışı<select data-pref-sel="treeStart"><option value="auto" ${S.prefs.treeStart === "auto" ? "selected" : ""}>Otomatik (üyeler kendi soyuyla, yönetici tüm ağaçla)</option><option value="mine" ${S.prefs.treeStart === "mine" ? "selected" : ""}>Her zaman benim soyum</option><option value="all" ${S.prefs.treeStart === "all" ? "selected" : ""}>Her zaman tüm ağaç</option></select></label>
       <label>Ağaçtaki kişi seçme listesinin sırası<select data-pref-sel="dropSort">${Object.entries(SORTS).map(([k, t]) => `<option value="${k}" ${S.prefs.dropSort === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
     </div>
-    ${me.is_admin ? "" : `<div class="panel" style="margin-top:1rem"><h2>Taleplerim</h2>${myRequestsHtml()}</div>`}
+    ${me.is_admin ? `<div class="panel" style="margin-top:1rem"><h2>🔔 Yönetici bildirimleri</h2><div id="pushBox" class="muted">Kontrol ediliyor…</div></div>` : `<div class="panel" style="margin-top:1rem"><h2>Taleplerim</h2>${myRequestsHtml()}</div>`}
     <div class="panel" style="margin-top:1rem"><h2>📱 Uygulama olarak kullan</h2>
       ${isStandalone()
         ? `<p class="muted">Şu anda uygulama olarak kullanıyorsunuz.</p>`
@@ -754,7 +831,7 @@ function invitesListHtml() {
       <div class="inv-actions">
         <select data-inv-perm aria-label="Yetki">
           <option value="0" ${i?.can_add ? "" : "selected"}>Kendi kaydı + alt/üst soyu (onaylı)</option>
-          <option value="1" ${i?.can_add ? "selected" : ""}>Tam yetki (herkes için öner, onaylı)</option></select>
+          <option value="1" ${i?.can_add ? "selected" : ""}>Tam yetki (ekledikleri hemen kendinde görünür, onayla herkese)</option></select>
         <button type="button" class="btn small primary" data-action="saveInvite" data-id="${p.id}">Kaydet</button>
         ${i ? `<button type="button" class="btn small" data-action="inviteMsg" data-id="${p.id}">Davet gönder</button>` : ""}
       </div></div>`;
@@ -861,7 +938,7 @@ async function openPerson(id) {
   const rels = [
     father ? row("Baba", father) : missing("Baba", "father"),
     mother ? row("Anne", mother) : missing("Anne", "mother"),
-    ...spRows.map((r) => { const o = byId(r.person_a === id ? r.person_b : r.person_a); return o ? row("Eş", o, canDelSpouse() ? ` <button type="button" class="mini" data-action="delSpouse" data-id="${r.id}" data-person="${id}" title="Eşliği kaldır">×</button>` : "") : ""; }),
+    ...spRows.map((r) => { const o = byId(r.person_a === id ? r.person_b : r.person_a); return o ? row("Eş", o, (isPending(r) ? " ⏳" : "") + (canDelSpouse(r) ? ` <button type="button" class="mini" data-action="delSpouse" data-id="${r.id}" data-person="${id}" title="Eşliği kaldır (ilk 5 dakika hemen, sonra yönetici onayıyla)">×</button>` : "")) : ""; }),
     ...impliedSp.map((o) => row("Eş", o)),
     ...sibs.map((x) => row(x.gender === "E" ? "Erkek kardeş" : x.gender === "K" ? "Kız kardeş" : "Kardeş", x)),
     ...kids.map((x) => row(x.gender === "E" ? "Oğlu" : x.gender === "K" ? "Kızı" : "Çocuğu", x)),
@@ -883,6 +960,7 @@ async function openPerson(id) {
       <div><h2>${esc(fullName(p))} ${isDead(p) ? `<span class="dm-inline" title="Vefat etti">&#9770;&#xFE0E;</span>` : ""}</h2>
         <div class="muted">${esc(years(p))}${isDead(p) ? " · vefat etti" : ""}</div></div></div>
     ${pend ? `<p class="pending">⏳ Bu kişi için ${pend} değişiklik talebi onay bekliyor.</p>` : ""}
+    ${isPending(p) ? `<p class="pending">⏳ ${isMine(p.created_by) ? "Bu kişiyi siz eklediniz: yönetici onaylayana kadar yalnızca siz ve yönetici görüyorsunuz." : `Ekleyen: ${esc(profName(p.created_by) || "bir üye")}. Henüz yayınlanmadı; <b>Onaylar</b> sekmesinden onaylayabilirsiniz.`}</p>` : ""}
     ${p.hidden_for ? `<p class="hiddenbar">${esc(hiddenLabel(p))}</p>` : ""}
     ${info.length ? `<table class="infotable">${info.map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join("")}</table>` : ""}
     ${p.notes ? `<p class="notes">${esc(p.notes)}</p>` : ""}
@@ -892,12 +970,12 @@ async function openPerson(id) {
       ${line ? `<button type="button" class="btn" data-action="addChild" data-id="${id}">+ Çocuk</button><button type="button" class="btn" data-action="addSibling" data-id="${id}">+ Kardeş</button><button type="button" class="btn" data-action="addSpouse" data-id="${id}">+ Eş</button>` : ""}
       <button type="button" class="btn" data-action="focusOn" data-id="${id}">🧬 Soyunu göster</button>
       ${canEditPerson(p) ? `<button type="button" class="btn" data-action="editPerson" data-id="${id}">Düzenle</button>` : ""}
-      ${canDeletePerson() ? `<button type="button" class="btn danger" data-action="deletePerson" data-id="${id}">Sil</button>` : ""}
+      ${canDeletePerson(p) ? `<button type="button" class="btn danger" data-action="deletePerson" data-id="${id}" title="Ekledikten sonraki ilk 5 dakika içinde hemen silinir; sonrasında yönetici onayı gerekir">${instantNow(p) ? "Sil" : "Silme talebi"}</button>` : ""}
     </div>
-    ${isAdmin() ? "" : `<p class="muted small">Yaptığınız değişiklikler yönetici onayından sonra listeye eklenir.</p>`}
+    ${isAdmin() ? "" : `<p class="muted small">${instantAdd() ? "Eklediğiniz kişiler hemen sizin ekranınızda görünür; diğer üyeler yönetici onayından sonra görür. Diğer değişiklikler yönetici onayından sonra uygulanır." : "Yaptığınız değişiklikler yönetici onayından sonra listeye eklenir."} Başkasının eklediği kaydı silemezsiniz, ama bilgi notu ekleyebilirsiniz.</p>`}
     ${sideSection(p, spRows.length || impliedSp.length)}
     <h3>Bilgi notları <button type="button" class="btn small" data-action="addNote" data-id="${id}">+ Not</button></h3>
-    ${notes.length ? notes.map((n) => `<div class="note"><div class="muted">${esc(n.author_name || profName(n.author_id) || "")} · ${fmtDT(n.created_at)}${isAdmin() ? ` <button type="button" class="mini" data-action="delNote" data-id="${n.id}" data-person="${id}" title="Notu sil">×</button>` : ""}</div>${esc(n.body)}</div>`).join("") : `<p class="muted">Henüz not yok.</p>`}
+    ${notes.length ? notes.map((n) => `<div class="note"><div class="muted">${esc(n.author_name || profName(n.author_id) || "")} · ${fmtDT(n.created_at)}${ownerOk(n.author_id) ? ` <button type="button" class="mini" data-action="delNote" data-id="${n.id}" data-person="${id}" title="Notu sil (ilk 5 dakika hemen, sonra yönetici onayıyla)">×</button>` : ""}</div>${esc(n.body)}</div>`).join("") : `<p class="muted">Henüz not yok.</p>`}
     <h3>Fotoğraflar <button type="button" class="btn small" data-action="addPhoto" data-id="${id}">+ Fotoğraf</button></h3>
     <div id="photoBox" class="muted" data-pid="${id}">Yükleniyor…</div>`);
 
@@ -913,7 +991,7 @@ async function openPerson(id) {
           <span class="muted">${esc(profName(ph.uploaded_by))}</span>
           <span class="fig-actions">
             ${ph.uploaded_by === S.user.id ? `<button type="button" class="btn small" data-action="editPhoto" data-id="${ph.id}" data-person="${id}">Görünürlük</button>` : ""}
-            ${ph.uploaded_by === S.user.id || S.me.is_admin ? `<button type="button" class="btn small danger" data-action="delPhoto" data-id="${ph.id}" data-person="${id}">Sil</button>` : ""}
+            ${ph.uploaded_by === S.user.id ? `<button type="button" class="btn small danger" data-action="delPhoto" data-id="${ph.id}" data-person="${id}">Sil</button>` : ""}
           </span></figcaption></figure>`).join("")}</div>`
     : `<p class="muted">Görebileceğiniz fotoğraf yok.</p>`;
 }
@@ -927,7 +1005,16 @@ async function loadPhotos(personId) {
 }
 
 // ---------- değişiklik gönderme (yönetici: hemen uygulanır, diğerleri: onaya düşer) ----------
+async function saveInstant(req) {
+  const r = req.kind === "add_person"
+    ? await sb.rpc("add_person_pending", { p: req.payload, summary: req.summary })
+    : await sb.rpc("add_spouse_pending", { a: req.payload.person_a, b: req.payload.person_b, mdate: req.payload.marriage_date || null, summary: req.summary });
+  if (r.error) throw dbOld(r.error);
+  notifyAdmin({ type: "request", id: r.data.request_id });
+  return { pending: true, instant: true, id: r.data.person_id || null };
+}
 async function saveChange(req) {
+  if (instantAdd() && (req.kind === "add_person" || req.kind === "add_spouse")) return saveInstant(req);
   const ins = await sb.from("change_requests").insert({
     kind: req.kind, person_id: req.person_id || null, payload: req.payload, summary: req.summary,
     requester_name: S.me.full_name || S.me.email,
@@ -936,7 +1023,7 @@ async function saveChange(req) {
     if (/change_requests|schema cache/.test(ins.error.message || "")) throw new Error("Veritabanı güncel değil. Supabase > SQL Editor'de guncelleme.sql dosyasını çalıştırın.");
     throw ins.error;
   }
-  if (!isAdmin()) return { pending: true };
+  if (!isAdmin()) { notifyAdmin({ type: "request", id: ins.data.id }); return { pending: true }; }
   const r = await sb.rpc("review_change", { req_id: ins.data.id, approve: true, note: null });
   if (r.error) throw r.error;
   return { pending: false, id: r.data };
@@ -944,7 +1031,11 @@ async function saveChange(req) {
 async function finishChange(res, personId) {
   await loadAll();
   render();
-  if (res.pending) {
+  if (res.instant) {
+    toast("Eklendi. Şu an yalnızca siz görüyorsunuz; yönetici onaylayınca herkes görür.");
+    const id = res.id || personId;
+    if (id && byId(id)) openPerson(id); else closeModal();
+  } else if (res.pending) {
     toast("Talep yöneticiye gönderildi. Onaylanınca listeye eklenir.");
     if (personId && byId(personId)) openPerson(personId); else closeModal();
   } else {
@@ -966,11 +1057,12 @@ function showVal(k, v) {
 function personForm(p, preset = {}) {
   const v = p || preset;
   const others = S.people.filter((x) => !p || x.id !== p.id);
-  const lockParent = (k) => !isAdmin() && p && (p[k] || p["_h" + k]); // yönetici dışı mevcut ebeveyn bağını değiştiremez/silemez
+  const ownPending = !!p && isPending(p) && isMine(p.created_by);
+  const lockParent = (k) => !isAdmin() && !ownPending && p && (p[k] || p["_h" + k]); // yönetici dışı mevcut ebeveyn bağını değiştiremez/silemez
   const opt = (list, sel) => `<option value="">—</option>` + list.map((x) => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(fullName(x))} ${esc(years(x))}</option>`).join("");
   const dead = !!(v.is_deceased || v.death_date);
   showModal(`<h2>${p ? "Kişiyi düzenle" : "Yeni kişi"}</h2>
-    ${isAdmin() ? "" : `<p class="muted small">Kaydettiğinizde değişiklik yönetici onayına gönderilir.</p>`}
+    ${isAdmin() ? "" : !p && instantAdd() ? `<p class="muted small">Eklediğiniz kişi hemen sizin ekranınızda görünür; diğer üyeler yönetici onayından sonra görür.</p>` : ownPending ? `<p class="muted small">Bu kişi henüz yayınlanmadığı için değişiklikleriniz hemen uygulanır.</p>` : `<p class="muted small">Kaydettiğinizde değişiklik yönetici onayına gönderilir.</p>`}
     <form data-form="person" data-id="${p?.id || ""}" data-spouse-of="${preset.spouseOf || ""}" data-father-of="${preset.fatherOf || ""}" data-mother-of="${preset.motherOf || ""}">
       <div class="row2"><label>Ad<input name="first_name" required value="${esc(v.first_name)}"></label>
         <label>Soyad<input name="last_name" value="${esc(v.last_name)}"></label></div>
@@ -987,7 +1079,7 @@ function personForm(p, preset = {}) {
       <label>Baba<select name="father_id" ${lockParent("father_id") ? "disabled" : ""}>${opt(others.filter((x) => x.gender !== "K"), v.father_id)}</select></label>
       <label>Anne<select name="mother_id" ${lockParent("mother_id") ? "disabled" : ""}>${opt(others.filter((x) => x.gender !== "E"), v.mother_id)}</select></label>
       <label class="full">Notlar<textarea name="notes" rows="2">${esc(v.notes)}</textarea></label>
-      <div class="actions"><button type="button" class="btn" data-action="closeModal">Vazgeç</button><button class="btn primary">${isAdmin() ? "Kaydet" : "Onaya gönder"}</button></div>
+      <div class="actions"><button type="button" class="btn" data-action="closeModal">Vazgeç</button><button class="btn primary">${isAdmin() || ownPending || (!p && instantAdd()) ? (p ? "Kaydet" : "Ekle") : "Onaya gönder"}</button></div>
     </form>`, "wide");
 }
 
@@ -1013,9 +1105,15 @@ async function submitPerson(f) {
         const o = old[k] === undefined || old[k] === "" ? null : old[k];
         if (o !== obj[k] && !(k === "is_deceased" && !o && !obj[k])) payload[k] = obj[k];
       });
-      if (!isAdmin()) { if (old.father_id) delete payload.father_id; if (old.mother_id) delete payload.mother_id; }
+      const ownPending = isPending(old) && isMine(old.created_by);
+      if (!isAdmin() && !ownPending) { if (old.father_id) delete payload.father_id; if (old.mother_id) delete payload.mother_id; }
       if (!Object.keys(payload).length) { btn.disabled = false; return toast("Değişiklik yok."); }
       const summary = `${fullName(old)}: ` + Object.entries(payload).map(([k, v]) => `${FIELD_LABELS[k]}: ${showVal(k, old[k])} → ${showVal(k, v)}`).join("; ");
+      if (ownPending) {
+        const r = await sb.rpc("edit_pending_person", { pid: id, patch: payload, new_summary: null });
+        if (r.error) throw dbOld(r.error);
+        return await finishChange({ pending: false, id }, id);
+      }
       res = await saveChange({ kind: "update_person", person_id: id, payload, summary });
       return await finishChange(res, id);
     }
@@ -1033,18 +1131,28 @@ async function submitPerson(f) {
   }
 }
 
+// Silme: RPC kuralları uygular (yalnızca ekleyen; 5 dk içinde hemen, sonra yönetici onayı; toplu silme yok)
+async function removeStorage(paths) {
+  if (paths && paths.length) { try { await sb.storage.from("photos").remove(paths); } catch (_) { /* yok sayılır */ } }
+}
+async function requestDelete(kind, id) {
+  const r = await sb.rpc("request_delete", { kind, tid: id });
+  if (r.error) { toast("Hata: " + dbOld(r.error).message); return null; }
+  const d = r.data || {};
+  if (d.status === "deleted") { await removeStorage(d.storage_paths); toast("Silindi"); }
+  else { toast("Silme talebi yöneticiye gönderildi." + (d.reason ? ` (${d.reason})` : "")); notifyAdmin({ type: "request", id: d.request_id }); }
+  await loadAll();
+  render();
+  return d;
+}
+const delAsk = (what, row) => `${what} silinsin mi?\n\n` + (instantNow(row) ? "Hemen silinir." : "Eklenmesinden 5 dakikadan fazla geçtiği için bu bir silme TALEBİ olarak yönetici onayına gönderilir.");
 async function deletePerson(id) {
   const p = byId(id);
-  if (!confirm(`${fullName(p)} silinsin mi? Fotoğrafları da silinir.`)) return;
-  const { data: ph } = await sb.from("photos").select("storage_path").eq("person_id", id);
-  const { error } = await sb.from("people").delete().eq("id", id);
-  if (error) return toast("Hata: " + error.message);
-  if (ph?.length) await sb.storage.from("photos").remove(ph.map((x) => x.storage_path));
-  closeModal();
-  await loadAll();
-  if (S.rootId === id) S.rootId = null;
-  render();
-  toast("Silindi");
+  if (!p || !confirm(delAsk(fullName(p), p))) return;
+  const d = await requestDelete("person", id);
+  if (!d) return;
+  if (d.status === "deleted") { closeModal(); if (S.rootId === id) S.rootId = null; render(); }
+  else openPerson(id);
 }
 
 function addChild(id) {
@@ -1087,7 +1195,7 @@ function spouseForm(id) {
       <label>Mevcut kişilerden seç<select name="other" required><option value="">—</option>
         ${list.map((x) => `<option value="${x.id}">${esc(fullName(x))} ${esc(years(x))}</option>`).join("")}</select></label>
       <label>Evlilik tarihi<input type="date" name="marriage_date"></label>
-      <div class="actions"><button type="button" class="btn" data-action="newSpouse" data-id="${id}">Yeni kişi olarak ekle</button><button class="btn primary">${isAdmin() ? "Ekle" : "Onaya gönder"}</button></div>
+      <div class="actions"><button type="button" class="btn" data-action="newSpouse" data-id="${id}">Yeni kişi olarak ekle</button><button class="btn primary">${isAdmin() || instantAdd() ? "Ekle" : "Onaya gönder"}</button></div>
     </form>`);
 }
 async function submitSpouse(f) {
@@ -1117,11 +1225,11 @@ async function submitNote(f) {
 }
 
 // ---------- onaylar (yönetici) ve taleplerim ----------
-const KIND = { update_person: "Düzenleme", add_person: "Yeni kişi", add_spouse: "Eş ekleme", add_note: "Bilgi notu" };
+const KIND = { update_person: "Düzenleme", add_person: "Yeni kişi", add_spouse: "Eş ekleme", add_note: "Bilgi notu", delete_person: "🗑 Kişi silme talebi", delete_spouse: "🗑 Eşlik silme talebi", delete_note: "🗑 Not silme talebi", delete_photo: "🗑 Fotoğraf silme talebi" };
 const STATUS = { pending: "⏳ Onay bekliyor", approved: "✅ Onaylandı", rejected: "❌ Reddedildi" };
 
 function reqRow(r, admin) {
-  return `<div class="req ${r.status}"><div class="req-top"><b>${esc(KIND[r.kind] || r.kind)}</b><span class="muted">${esc(r.requester_name || profName(r.requested_by))} · ${fmtDT(r.created_at)}</span></div>
+  return `<div class="req ${r.status}${String(r.kind).startsWith("delete_") ? " del" : ""}"><div class="req-top"><b>${esc(KIND[r.kind] || r.kind)}</b><span class="muted">${esc(r.requester_name || profName(r.requested_by))} · ${fmtDT(r.created_at)}</span></div>
     <div>${esc(r.summary || "")}</div>
     ${r.status !== "pending" ? `<div class="muted small">${STATUS[r.status]}${r.review_note ? ` · ${esc(r.review_note)}` : ""}</div>` : ""}
     ${r.status === "pending" && admin ? `<div class="actions"><button type="button" class="btn small" data-action="rejectReq" data-id="${r.id}">Reddet</button><button type="button" class="btn small primary" data-action="approveReq" data-id="${r.id}">Onayla</button></div>` : ""}
@@ -1136,7 +1244,7 @@ function renderApprovals(v) {
   const done = S.requests.filter((r) => r.status !== "pending").slice(0, 40);
   const unann = S.requests.filter((r) => r.status === "approved" && !r.announced).length;
   v.innerHTML = `<div class="panel wide"><h2>Onay bekleyen değişiklikler</h2>
-      <p class="muted">Üyelerin önerdiği değişiklikler burada toplanır. Onayladığınızda listeye eklenir. Yeni onaylanan değişiklikleri üyelere duyurmak için duyuru hazırlayın.</p>
+      <p class="muted">Üyelerin önerdiği değişiklikler burada toplanır. Tam yetkili üyelerin eklediği kişiler kendi ekranlarında zaten görünür; onayladığınızda herkese açılır. Silme talepleri yalnızca tek tek onaylanır; toplu silme yoktur. Yeni onaylanan değişiklikleri üyelere duyurmak için duyuru hazırlayın.</p>
       <div class="actions wrap">${pend.length > 1 ? `<button type="button" class="btn" data-action="approveAll">Hepsini onayla (${pend.length})</button>` : ""}
         <button type="button" class="btn primary" data-action="announceForm">📣 Güncelleme duyurusu hazırla${unann ? ` (${unann})` : ""}</button></div></div>
     <div class="reqlist">${pend.length ? pend.map((r) => reqRow(r, true)).join("") : `<p class="muted center">Bekleyen talep yok.</p>`}</div>
@@ -1148,6 +1256,12 @@ async function reviewReq(id, approve, note) {
   return true;
 }
 async function afterReview() { await loadAll(); render(); }
+// Onaylanan silme taleplerinde fotoğraf dosyalarını depodan kaldır
+async function cleanupStorage(ids) {
+  const paths = [];
+  ids.forEach((id) => { const r = S.requests.find((x) => x.id === id); if (r?.payload?.storage_paths?.length) paths.push(...r.payload.storage_paths); });
+  await removeStorage(paths);
+}
 
 function announceForm() {
   const items = S.requests.filter((r) => r.status === "approved" && !r.announced).slice().sort((a, b) => String(a.reviewed_at).localeCompare(String(b.reviewed_at)));
@@ -1351,12 +1465,240 @@ async function submitPhotoEdit(f) {
   openPerson(f.dataset.person);
 }
 async function deletePhoto(id, personId) {
-  if (!confirm("Fotoğraf silinsin mi?")) return;
-  const { data: ph } = await sb.from("photos").select("storage_path").eq("id", id).single();
-  const { error } = await sb.from("photos").delete().eq("id", id);
-  if (error) return toast("Hata: " + error.message);
-  if (ph) await sb.storage.from("photos").remove([ph.storage_path]);
-  openPerson(personId);
+  const { data: ph } = await sb.from("photos").select("created_at").eq("id", id).single();
+  if (!ph || !confirm(delAsk("Fotoğraf", ph))) return;
+  if (await requestDelete("photo", id)) openPerson(personId);
+}
+
+// ---------- yedekleme (yönetici) ----------
+const today = () => todayStr();
+const b64 = (u8) => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+const utf8 = (t) => new TextEncoder().encode(t);
+function download(name, data, type) {
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+async function exportData(withMembers) {
+  const r = await sb.rpc("admin_export", { include_members: withMembers });
+  if (r.error) throw dbOld(r.error);
+  return r.data;
+}
+const csvCell = (v) => { const t = String(v ?? ""); return /[",;\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+function peopleCsv(d) {
+  const by = new Map(d.people.map((x) => [x.id, x]));
+  const nm = (id) => { const x = by.get(id); return x ? [x.first_name, x.last_name].filter(Boolean).join(" ") : ""; };
+  const sp = new Map();
+  d.spouses.forEach((s) => { (sp.get(s.person_a) || sp.set(s.person_a, []).get(s.person_a)).push(nm(s.person_b)); (sp.get(s.person_b) || sp.set(s.person_b, []).get(s.person_b)).push(nm(s.person_a)); });
+  const head = ["Ad", "Soyad", "Cinsiyet", "Doğum tarihi", "Ölüm tarihi", "Doğum yeri", "Şehir", "Kan grubu", "Vefat", "Defin yeri", "Baba", "Anne", "Eş(ler)", "Notlar", "Durum"];
+  const rows = d.people.map((x) => [x.first_name, x.last_name, x.gender === "E" ? "Erkek" : x.gender === "K" ? "Kadın" : "", x.birth_date, x.death_date, x.birth_place, x.city, x.blood_type,
+    x.is_deceased || x.death_date ? "evet" : "", x.burial_place, nm(x.father_id), nm(x.mother_id), (sp.get(x.id) || []).join(" & "), x.notes, x.approval === "pending" ? "onay bekliyor" : "yayında"]);
+  return "﻿" + [head, ...rows].map((r) => r.map(csvCell).join(";")).join("\r\n");
+}
+async function logBackup(kind, status, detail, recipients) {
+  await sb.from("backup_log").insert({ kind, status, detail: String(detail || "").slice(0, 300), recipients: recipients ?? null }).then(() => {}, () => {});
+}
+async function backupDownload(kind) {
+  try {
+    toast("Hazırlanıyor…");
+    const d = await exportData(true);
+    if (kind === "json") download(`soyagaci-kisiler-${today()}.json`, JSON.stringify(d, null, 2), "application/json");
+    else download(`soyagaci-kisiler-${today()}.csv`, peopleCsv(d), "text/csv;charset=utf-8");
+    await logBackup("indirme", "ok", `${kind.toUpperCase()} · ${d.people.length} kişi`);
+    toast(`${d.people.length} kişi yedeklendi`);
+    await loadAll(); renderView();
+  } catch (err) { toast("Hata: " + (err.message || err)); }
+}
+
+// Basit ZIP (sıkıştırmasız) oluşturucu: dış kütüphane gerekmez
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = (u8) => { let c = 0xffffffff; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function makeZip(files) {
+  const now = new Date();
+  const dosT = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const dosD = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const chunks = [], central = [];
+  let off = 0;
+  const u16 = (v) => [v & 255, (v >> 8) & 255], u32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  files.forEach((f) => {
+    const name = utf8(f.name), crc = crc32(f.data), size = f.data.length;
+    const head = new Uint8Array([0x50, 0x4b, 3, 4, ...u16(20), ...u16(0x0800), ...u16(0), ...u16(dosT), ...u16(dosD), ...u32(crc), ...u32(size), ...u32(size), ...u16(name.length), ...u16(0)]);
+    chunks.push(head, name, f.data);
+    central.push(new Uint8Array([0x50, 0x4b, 1, 2, ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(dosT), ...u16(dosD), ...u32(crc), ...u32(size), ...u32(size), ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), name);
+    off += head.length + name.length + size;
+  });
+  const csize = central.reduce((a, c) => a + c.length, 0);
+  const end = new Uint8Array([0x50, 0x4b, 5, 6, ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(csize), ...u32(off), ...u16(0)]);
+  return new Blob([...chunks, ...central, end], { type: "application/zip" });
+}
+const SOFT_FILES = ["index.html", "app.js", "style.css", "config.js", "sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png",
+  "schema.sql", "guncelleme.sql", "gizlilik.sql", "guncelleme2.sql", "README.md", "supabase/functions/send-backup/index.ts", "supabase/functions/notify-admin/index.ts"];
+// Sitenin çalışan dosyalarını (şu an yayında olan sürüm) toplar
+async function softwareZip() {
+  const files = [], missing = [];
+  for (const f of SOFT_FILES) {
+    try {
+      const r = await fetch(new URL(f, siteUrl()).href, { cache: "no-store" });
+      if (r.ok) files.push({ name: f, data: new Uint8Array(await r.arrayBuffer()) });
+      else missing.push(f);
+    } catch (_) { missing.push(f); }
+  }
+  if (!files.length) throw new Error("Yazılım dosyaları okunamadı");
+  files.push({ name: "YEDEK-BILGISI.txt", data: utf8(`Soyağacı yazılım yedeği\nTarih: ${new Date().toLocaleString("tr-TR")}\nAdres: ${siteUrl()}\n\nİçerdiği dosyalar:\n${files.map((x) => " - " + x.name).join("\n")}\n\nSitede yayınlanmadığı için eklenemeyenler (depodaki özgün dosyalardan alın):\n${missing.map((x) => " - " + x).join("\n") || " (yok)"}\n`) });
+  return { blob: makeZip(files), count: files.length - 1, missing };
+}
+async function backupSoftwareDownload() {
+  try {
+    toast("Hazırlanıyor…");
+    const z = await softwareZip();
+    download(`soyagaci-yazilim-${today()}.zip`, z.blob, "application/zip");
+    await logBackup("indirme", "ok", `Yazılım ZIP · ${z.count} dosya${z.missing.length ? `, ${z.missing.length} dosya sitede yok` : ""}`);
+    toast(`${z.count} dosya yedeklendi` + (z.missing.length ? ` (${z.missing.length} dosya sitede yayınlı değil)` : ""));
+    await loadAll(); renderView();
+  } catch (err) { toast("Hata: " + (err.message || err)); }
+}
+async function fnMessage(error) {
+  try { const j = await error.context.json(); return j.error || j.message || error.message; } catch (_) { return error.message || String(error); }
+}
+async function backupSend(test) {
+  if (S.backupBusy) return;
+  const incData = document.getElementById("bkData")?.checked, incSoft = document.getElementById("bkSoft")?.checked;
+  if (!S.recipients.length) return toast("Önce en az bir alıcı e-postası ekleyin.");
+  if (!test && !incData && !incSoft) return toast("Gönderilecek içeriği seçin (kişi verisi / yazılım).");
+  if (!test && !confirm(`${S.recipients.length} alıcıya e-posta gönderilsin mi?\n\nKişi yedeği; gizli aile taraflarını ve onay bekleyen kayıtları da içerir.`)) return;
+  S.backupBusy = true;
+  const btns = [...document.querySelectorAll("[data-action=backupSend],[data-action=backupTest]")];
+  btns.forEach((b) => { b.disabled = true; });
+  try {
+    toast(test ? "Test e-postası gönderiliyor…" : "Yedek hazırlanıp gönderiliyor…");
+    const attachments = [];
+    if (!test && incData) {
+      const d = await exportData(false);
+      attachments.push({ filename: `soyagaci-kisiler-${today()}.json`, content_type: "application/json", content_b64: b64(utf8(JSON.stringify(d, null, 2))) });
+      attachments.push({ filename: `soyagaci-kisiler-${today()}.csv`, content_type: "text/csv", content_b64: b64(utf8(peopleCsv(d))) });
+    }
+    if (!test && incSoft) {
+      const z = await softwareZip();
+      attachments.push({ filename: `soyagaci-yazilim-${today()}.zip`, content_type: "application/zip", content_b64: b64(new Uint8Array(await z.blob.arrayBuffer())) });
+    }
+    const { data, error } = await sb.functions.invoke("send-backup", { body: { test, attachments, site: siteUrl() } });
+    if (error) throw new Error(await fnMessage(error));
+    toast(test ? `Test e-postası gönderildi (${data?.sent ?? "?"} alıcı)` : `Yedek ${data?.sent ?? ""} alıcıya gönderildi`);
+  } catch (err) {
+    const msg = String(err.message || err);
+    toast(/Failed to fetch|not found|404|FunctionsFetchError|Relay/i.test(msg) ? "E-posta fonksiyonu kurulu değil (README > Yedekleme). Yedeği indirip elle gönderebilirsiniz." : "Hata: " + msg);
+  } finally {
+    S.backupBusy = false;
+    btns.forEach((b) => { b.disabled = false; });
+    await loadAll(); if (S.tab === "backup") renderView();
+  }
+}
+async function addRecipient() {
+  const em = document.getElementById("rcEmail"), lb = document.getElementById("rcLabel");
+  const email = em.value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast("Geçerli bir e-posta adresi yazın.");
+  const { error } = await sb.from("backup_recipients").insert({ email, label: lb.value.trim() || null });
+  if (error) return toast(error.code === "23505" ? "Bu adres zaten listede." : /backup_recipients|schema cache/.test(error.message) ? "Veritabanı güncel değil. guncelleme2.sql dosyasını çalıştırın." : "Hata: " + error.message);
+  await loadAll();
+  renderView();
+}
+function renderBackup(v) {
+  const last = S.blog.find((x) => x.status === "ok");
+  v.innerHTML = `<div class="panel wide"><h2>💾 Yedekleme</h2>
+      <p class="muted">Kişi verisi (kişiler, eşlikler, notlar, bekleyen kayıtlar, silme günlüğü) ve yazılım dosyaları ayrı ayrı yedeklenir. Fotoğraf dosyaları yedeğe girmez (Supabase > Storage'dan alınır). ${last ? `Son yedek: <b>${fmtDT(last.created_at)}</b> (${esc(last.kind)}).` : "Henüz yedek alınmadı."}</p></div>
+    <div class="panel wide"><h3>1. Kişi verisi</h3>
+      <p class="muted small">JSON tam yedektir (geri yüklemeye uygun). CSV, Excel'de açılır. Üye e-postaları ve davetler yalnızca indirilen dosyada bulunur.</p>
+      <div class="actions wrap"><button type="button" class="btn primary" data-action="backupJson">JSON indir</button><button type="button" class="btn" data-action="backupCsv">Excel için CSV indir</button></div></div>
+    <div class="panel wide"><h3>2. Yazılım</h3>
+      <p class="muted small">Sitede yayında olan uygulama dosyalarını (html, js, css, ayarlar, SQL ve e-posta/bildirim fonksiyonları) ZIP yapar.</p>
+      <div class="actions wrap"><button type="button" class="btn primary" data-action="backupZip">Yazılım ZIP indir</button></div></div>
+    <div class="panel wide"><h3>3. E-posta ile gönder</h3>
+      <p class="muted small">Yedek, aşağıda tanımladığınız kişilere e-posta eki olarak gider (alıcılar birbirini görmez). Gönderen: kurulumda tanımlanan hesap. Yedekte gizli aile tarafları da bulunur; alıcıları buna göre seçin.</p>
+      <div class="reqlist">${S.recipients.map((r) => `<div class="req"><div class="req-top"><span><b>${esc(r.label || r.email)}</b> ${r.label ? `<span class="muted">${esc(r.email)}</span>` : ""}</span><button type="button" class="mini" data-action="delRecipient" data-id="${r.id}" title="Listeden çıkar">×</button></div></div>`).join("") || `<p class="muted">Henüz alıcı yok.</p>`}</div>
+      <div class="row2"><label>E-posta<input id="rcEmail" type="email" inputmode="email" placeholder="ornek@gmail.com"></label><label>Ad (isteğe bağlı)<input id="rcLabel" placeholder="Örn. Abim"></label></div>
+      <div class="actions wrap"><button type="button" class="btn" data-action="addRecipient">+ Alıcı ekle</button></div>
+      <label class="check"><input type="checkbox" id="bkData" checked>Kişi verisi (JSON + CSV)</label>
+      <label class="check"><input type="checkbox" id="bkSoft" checked>Yazılım (ZIP)</label>
+      <div class="actions wrap"><button type="button" class="btn primary" data-action="backupSend">Seçili alıcılara gönder</button><button type="button" class="btn" data-action="backupTest">Test e-postası gönder</button></div></div>
+    ${S.blog.length ? `<div class="panel wide"><h3>Son yedekler</h3><div class="reqlist">${S.blog.map((b) => `<div class="req ${b.status === "ok" ? "approved" : "rejected"}"><div class="req-top"><b>${b.status === "ok" ? "✅" : "❌"} ${esc(b.kind)}</b><span class="muted">${fmtDT(b.created_at)}</span></div><div class="muted small">${esc(b.detail || "")}${b.recipients ? ` · ${b.recipients} alıcı` : ""}</div></div>`).join("")}</div></div>` : ""}
+    ${S.dlog.length ? `<div class="panel wide"><h3>Silme günlüğü</h3><p class="muted small">Silinen her kaydın tam yedeği veritabanında (deletion_log) saklanır. Son silmeler:</p><div class="reqlist">${S.dlog.map((d) => `<div class="req"><div class="req-top"><b>🗑 ${esc(d.label || d.kind)}</b><span class="muted">${fmtDT(d.created_at)}</span></div><div class="muted small">${esc(d.kind)} · ${d.mode === "approved" ? "yönetici onayıyla" : "ekleyen sildi (ilk 5 dk)"} · ${esc(profName(d.deleted_by) || "")}</div></div>`).join("")}</div></div>` : ""}`;
+}
+
+// ---------- yönetici bildirimleri (mobil/masaüstü push + uygulama açıkken anlık) ----------
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const urlB64ToU8 = (b) => { const p = "=".repeat((4 - (b.length % 4)) % 4); const r = atob((b + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from([...r].map((c) => c.charCodeAt(0))); };
+async function currentSub() { try { return await (await navigator.serviceWorker.ready).pushManager.getSubscription(); } catch (_) { return null; } }
+async function updatePushBox() {
+  const box = document.getElementById("pushBox");
+  if (!box) return;
+  let h;
+  if (!VAPID_PUBLIC_KEY) h = `Bildirim anahtarı (VAPID) <b>config.js</b> dosyasına eklenmemiş. Kurulum için README'deki "Yönetici bildirimleri" bölümüne bakın.`;
+  else if (!pushSupported()) h = `Bu tarayıcı bildirimi desteklemiyor. <b>iPhone'da</b> önce siteyi Safari'de açıp Paylaş &gt; "Ana Ekrana Ekle" ile uygulamayı yükleyin (iOS 16.4 ve üstü), sonra uygulamayı buradan açın.`;
+  else if (Notification.permission === "denied") h = `Bildirim izni engellenmiş. Tarayıcı/telefon ayarlarından bu site için bildirimlere izin verin, sonra sayfayı yenileyin.`;
+  else if (await currentSub()) h = `<p>✅ Bu cihazda bildirimler açık. Onayınıza düşen her işlem telefonunuza bildirim olarak gelir.</p><div class="actions wrap"><button type="button" class="btn" data-action="pushTest">Test bildirimi gönder</button><button type="button" class="btn" data-action="pushOff">Bu cihazda kapat</button></div>`;
+  else h = `<p>Yeni bir kişi/değişiklik/silme talebi ya da yeni üye onayınıza düştüğünde telefonunuza bildirim gelsin.</p><div class="actions wrap"><button type="button" class="btn primary" data-action="pushOn">Bildirimleri aç</button></div>`;
+  box.classList.remove("muted");
+  box.innerHTML = h;
+}
+async function pushOn() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Bildirim izni verilmedi."); return updatePushBox(); }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(VAPID_PUBLIC_KEY) }));
+    const j = sub.toJSON();
+    const { error } = await sb.rpc("save_push_subscription", { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth, p_ua: navigator.userAgent });
+    if (error) throw dbOld(error);
+    toast("Bildirimler açıldı");
+  } catch (err) { toast("Hata: " + (err.message || err)); }
+  updatePushBox();
+}
+async function pushOff() {
+  try {
+    const sub = await currentSub();
+    if (sub) { const ep = sub.endpoint; await sub.unsubscribe(); await sb.from("push_subscriptions").delete().eq("endpoint", ep); }
+    toast("Bu cihazda bildirimler kapatıldı");
+  } catch (err) { toast("Hata: " + (err.message || err)); }
+  updatePushBox();
+}
+async function pushTest() {
+  const { error } = await sb.functions.invoke("notify-admin", { body: { type: "test" } });
+  toast(error ? "Bildirim fonksiyonu kurulu değil ya da hata verdi (README > Yönetici bildirimleri)." : "Test bildirimi gönderildi, birkaç saniye içinde gelmeli.");
+}
+function setBadge() {
+  if (!S.me?.is_admin || !navigator.setAppBadge) return;
+  const n = S.requests.filter((r) => r.status === "pending").length + S.profiles.filter((p) => !p.approved).length;
+  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+}
+function updateNav() { const n = document.querySelector(".top nav"); if (n && S.me) n.innerHTML = navHtml(); }
+async function softRefresh() {
+  if (!S.me?.is_admin) return;
+  await loadAll();
+  updateNav();
+  setBadge();
+  if (!modal.classList.contains("open") && (S.tab === "approvals" || S.tab === "members")) renderView();
+}
+let watchCh = null;
+function stopWatch() { if (watchCh) { try { sb.removeChannel(watchCh); } catch (_) { /* yok sayılır */ } watchCh = null; } }
+function startWatch() {
+  setBadge();
+  if (!S.me?.is_admin || watchCh) return;
+  watchCh = sb.channel("admin-watch")
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "change_requests" }, (e) => {
+      if (e.new?.requested_by === S.user?.id) return;
+      toast("🔔 Onayınıza yeni işlem düştü: " + String(e.new?.summary || "").slice(0, 80));
+      softRefresh();
+    })
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "profiles" }, () => { toast("🔔 Yeni üye onay bekliyor"); softRefresh(); })
+    .subscribe();
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") softRefresh(); });
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data?.go === "approvals" && S.me?.is_admin) { S.tab = "approvals"; closeModal(); softRefresh().then(render); }
+  });
 }
 
 // ---------- olaylar ----------
@@ -1396,11 +1738,9 @@ const actions = {
   addParent: (id, el) => addParent(id, el.dataset.role),
   addNote: (id) => noteForm(id),
   delNote: async (id, el) => {
-    if (!confirm("Not silinsin mi?")) return;
-    const { error } = await sb.from("person_notes").delete().eq("id", id);
-    if (error) return toast("Hata: " + error.message);
-    await loadAll();
-    openPerson(el.dataset.person);
+    const row = S.notes.find((x) => x.id === id);
+    if (!row || !confirm(delAsk("Not", row))) return;
+    if (await requestDelete("note", id)) openPerson(el.dataset.person);
   },
   setView: (mode) => {
     S.view = mode === "lineage" ? "lineage" : "all";
@@ -1411,7 +1751,10 @@ const actions = {
   focusOn: (id) => { S.view = "lineage"; S.focus = id; S.fitPending = true; S.tab = "tree"; closeModal(); render(); },
   moreUp: () => { S.prefs.up = Math.min(99, Number(S.prefs.up) + 1); savePrefs(); S.fitPending = true; renderView(); },
   bloodScreen: () => { S.tab = "blood"; render(); },
-  approveReq: async (id) => { if (await reviewReq(id, true)) { toast("Onaylandı"); await afterReview(); } },
+  approveReq: async (id) => {
+    if (String(S.requests.find((r) => r.id === id)?.kind).startsWith("delete_") && !confirm("Bu silme talebi onaylanırsa kayıt silinir (yedeği silme günlüğünde saklanır). Onaylıyor musunuz?")) return;
+    if (await reviewReq(id, true)) { toast("Onaylandı"); await afterReview(); await cleanupStorage([id]); }
+  },
   rejectReq: async (id) => {
     const note = prompt("Red nedeni (isteğe bağlı):");
     if (note === null) return;
@@ -1420,14 +1763,16 @@ const actions = {
   approveAll: async () => {
     const pend = S.requests.filter((r) => r.status === "pending").slice().reverse();
     if (!confirm(`${pend.length} talebin hepsi onaylansın mı?`)) return;
-    for (const r of pend) if (!(await reviewReq(r.id, true))) break;
-    toast("Onaylandı");
+    const done = [];
+    for (const r of pend) { if (String(r.kind).startsWith("delete_")) continue; if (!(await reviewReq(r.id, true))) break; done.push(r.id); }
+    toast(pend.some((r) => String(r.kind).startsWith("delete_")) ? "Silme talepleri hariç onaylandı (silmeler tek tek onaylanır)" : "Onaylandı");
     await afterReview();
+    await cleanupStorage(done);
   },
   withdrawReq: async (id) => {
     if (!confirm("Talep geri çekilsin mi?")) return;
-    const { error } = await sb.from("change_requests").delete().eq("id", id);
-    if (error) return toast("Hata: " + error.message);
+    const { error } = await sb.rpc("withdraw_request", { req_id: id });
+    if (error) return toast("Hata: " + dbOld(error).message);
     await loadAll();
     renderView();
   },
@@ -1461,13 +1806,24 @@ const actions = {
   addSpouse: (id) => spouseForm(id),
   newSpouse: (id) => personForm(null, { spouseOf: id }),
   delSpouse: async (id, el) => {
-    if (!confirm("Eşlik kaydı kaldırılsın mı?")) return;
-    const { error } = await sb.from("spouses").delete().eq("id", id);
+    const row = S.spouses.find((x) => x.id === id);
+    if (!row || !confirm(delAsk("Eşlik kaydı", row))) return;
+    if (await requestDelete("spouse", id)) openPerson(el.dataset.person);
+  },
+  backupJson: () => backupDownload("json"),
+  backupCsv: () => backupDownload("csv"),
+  backupZip: backupSoftwareDownload,
+  backupSend: () => backupSend(false),
+  backupTest: () => backupSend(true),
+  addRecipient: addRecipient,
+  delRecipient: async (id) => {
+    if (!confirm("Bu alıcı listeden çıkarılsın mı?")) return;
+    const { error } = await sb.from("backup_recipients").delete().eq("id", id);
     if (error) return toast("Hata: " + error.message);
     await loadAll();
-    render();
-    openPerson(el.dataset.person);
+    renderView();
   },
+  pushOn, pushOff, pushTest,
   addPhoto: (id) => photoUploadForm(id),
   editPhoto: (id, el) => photoEditForm(id, el.dataset.person),
   delPhoto: (id, el) => deletePhoto(id, el.dataset.person),
