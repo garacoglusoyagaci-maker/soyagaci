@@ -241,7 +241,7 @@ main.wide { max-width: none; padding-left: .6rem; padding-right: .6rem; }
 .seg button.on { background: var(--accent); color: var(--accent-text); }
 .toolbar .inl { display: inline-flex; align-items: center; gap: .3rem; margin: 0; font-size: .85rem; color: var(--text); flex: none; }
 .toolbar .inl select { flex: none; min-width: 0; width: auto; }
-.ancwrap { display: flex; flex-direction: column; align-items: center; margin-bottom: 10px; }
+.ancwrap { display: flex; flex-direction: column; align-items: center; margin-bottom: 30px; }
 .anclabel { font-size: .7rem; color: var(--muted); margin-bottom: 2px; }
 .ancrow { display: flex; flex-wrap: nowrap; justify-content: center; align-items: flex-start; gap: 10px; }
 .focusline { display: flex; align-items: flex-start; justify-content: center; gap: 10px; }
@@ -260,3 +260,12 @@ select[data-side] { width: 100%; }
 .pcard.pend { border: 2px dotted #e0a800; }
 .pcard .pk { position: absolute; bottom: 3px; left: 5px; font-size: .75rem; line-height: 1; }
 .req.del { border-left: 4px solid var(--danger); }
+
+/* ---------- soy görünümü çizgileri, toplu onay ---------- */
+.tree .lines { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 0; overflow: visible; }
+.tree .lines path { fill: none; stroke: var(--line); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tree .ancwrap, .tree .focusline { position: relative; z-index: 1; }
+.tree > ul { position: relative; }
+.anclabel { position: relative; z-index: 2; background: rgba(255, 255, 255, .55); padding: 0 6px; border-radius: 6px; }
+input.sel { display: inline-block; width: 18px; height: 18px; margin: 0 .3rem 0 0; vertical-align: middle; }
+label.selall { margin: 0 .4rem; align-self: center; }

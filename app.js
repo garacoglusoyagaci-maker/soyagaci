@@ -7,7 +7,7 @@ const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
-const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), view: "all", focus: null, viewInit: false, depthMax: Infinity, recipients: [], blog: [], dlog: [], backupBusy: false, prefs: loadPrefs() };
+const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), view: "all", focus: null, viewInit: false, depthMax: Infinity, recipients: [], blog: [], dlog: [], sel: new Set(), backupBusy: false, prefs: loadPrefs() };
 const startTab = () => (S.prefs.start === "list" ? "people" : "tree");
 S.tab = startTab();
 const BLOOD = ["A+", "A-", "B+", "B-", "AB+", "AB-", "0+", "0-"];
@@ -114,8 +114,9 @@ const graceLeft = (row) => FIVE_MIN - (Date.now() - new Date(row.created_at).get
 const instantNow = (row) => isPending(row) || graceLeft(row) > 0;
 const canDeletePerson = (p) => ownerOk(p.created_by);
 const canDelSpouse = (s) => ownerOk(s.created_by);
-const instantAdd = () => !isAdmin() && isFull(); // tam yetkili üye: eklediği kayıt hemen kendi ekranında görünür
-const dbOld = (e) => (/add_person_pending|add_spouse_pending|request_delete|withdraw_request|edit_pending_person|admin_export|schema cache/.test(e?.message || "") ? new Error("Veritabanı güncel değil. Supabase > SQL Editor'de guncelleme2.sql dosyasını çalıştırın.") : e);
+const instantAdd = () => !isAdmin() && isFull();
+const isTrusted = () => !!(S.me && S.me.approved && S.me.can_publish && S.me.can_add && !S.me.is_admin); // onaysız yetki: eklediği onay beklemeden yayınlanır // tam yetkili üye: eklediği kayıt hemen kendi ekranında görünür
+const dbOld = (e) => (/add_person_pending|add_spouse_pending|request_delete|withdraw_request|edit_pending_person|admin_export|add_note_trusted|schema cache/.test(e?.message || "") ? new Error("Veritabanı güncel değil. Supabase > SQL Editor'de guncelleme2.sql dosyasını çalıştırın.") : e);
 // Yönetici onayına düşen işlemi yöneticinin telefonuna bildir (Edge Function; kurulmamışsa sessizce geçilir)
 function notifyAdmin(body) { if (isAdmin()) return; try { Promise.resolve(sb.functions.invoke("notify-admin", { body })).catch(() => {}); } catch (_) { /* yok sayılır */ } }
 const canAddParent = (p, role) => !(role === "father" ? p.father_id || p._hfather_id : p.mother_id || p._hmother_id) && inLine(p.id);
@@ -432,6 +433,55 @@ function applyBands() {
   tree.style.zoom = prevZoom;
 }
 
+// "Benim soyum": ebeveynden çocuğa bağlantı çizgileri (üst soy dahil). Kartların gerçek konumları ölçülüp SVG ile çizilir.
+function drawLines() {
+  const tree = document.querySelector(".tree");
+  if (!tree) return;
+  tree.querySelectorAll(".lines").forEach((x) => x.remove());
+  if (S.view !== "lineage") return;
+  const base = tree.getBoundingClientRect();
+  const z = base.width / (tree.offsetWidth || 1) || 1; // ekrandaki yakınlaştırma oranı: ölçümler ağacın kendi koordinatına çevrilir
+  const box = new Map(); // kişi -> { cx, top, bottom (kart), ctop, cbottom (çift/kart kabı) }
+  tree.querySelectorAll(".pcard[data-id]").forEach((el) => {
+    if (el.closest("ul ul") || el.classList.contains("ghost")) return; // alt soy zaten CSS çizgileriyle bağlı
+    const id = el.dataset.id;
+    if (box.has(id)) return;
+    const r = el.getBoundingClientRect();
+    const wrap = (el.closest(".couple") || el.closest(".partner") || el).getBoundingClientRect();
+    box.set(id, { cx: (r.left + r.width / 2 - base.left) / z, top: (r.top - base.top) / z, bottom: (r.bottom - base.top) / z, wtop: (wrap.top - base.top) / z, wbottom: (wrap.bottom - base.top) / z });
+  });
+  const groups = new Map();
+  box.forEach((c, id) => {
+    const p = byId(id);
+    if (!p) return;
+    const f = p.father_id && box.get(p.father_id), m = p.mother_id && box.get(p.mother_id);
+    if (!f && !m) return;
+    const key = `${f ? p.father_id : ""}|${m ? p.mother_id : ""}`;
+    const g = groups.get(key) || { f, m, kids: [] };
+    g.kids.push(c);
+    groups.set(key, g);
+  });
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("class", "lines");
+  svg.setAttribute("width", tree.scrollWidth);
+  svg.setAttribute("height", tree.scrollHeight);
+  const path = (d) => { const e = document.createElementNS(NS, "path"); e.setAttribute("d", d); svg.append(e); };
+  groups.forEach((g) => {
+    const above = [g.f, g.m].filter(Boolean).filter((x) => x.bottom < Math.min(...g.kids.map((k) => k.top)));
+    if (!above.length) return;
+    const ax = above.reduce((a, x) => a + x.cx, 0) / above.length;
+    const ay = Math.max(...above.map((x) => x.wbottom));
+    const kidTop = Math.min(...g.kids.map((k) => k.wtop));
+    const bus = ay + Math.min(14, Math.max(6, (kidTop - ay) / 2));
+    const xs = [ax, ...g.kids.map((k) => k.cx)];
+    path(`M${ax} ${ay}V${bus}`);
+    if (Math.min(...xs) !== Math.max(...xs)) path(`M${Math.min(...xs)} ${bus}H${Math.max(...xs)}`);
+    g.kids.forEach((k) => path(`M${k.cx} ${bus}V${k.wtop}`));
+  });
+  tree.append(svg);
+}
+
 function genForm() {
   const n = Math.max(1, S.maxGen + 1);
   showModal(`<h2>Nesil renkleri</h2>
@@ -512,7 +562,6 @@ function lineageHtml() {
     const units = coupleUnits(row, extra, used);
     h += `<div class="ancwrap"><div class="anclabel">${ancLabel(n - 1 - i)}</div><div class="ancrow" data-gen="${i}">${units.map(unitHtml).join("")}</div></div>`;
   });
-  if (n) h += `<div class="ancarrow">↓</div>`;
   // Kardeşler, seçilen kişiyle aynı satırda: büyükler solda, küçükler sağda (kişi hep ortada kalsın diye karşı tarafa görünmez boşluk eklenir)
   let side = null;
   if (S.prefs.sibs) {
@@ -590,6 +639,7 @@ function applyZoom() {
   tree.style.zoom = S.zoom;
   const pct = document.getElementById("zoomPct");
   if (pct) pct.textContent = Math.round(S.zoom * 100) + "%";
+  drawLines(); // yakınlaştırmadan sonra konumlar değişebilir: çizgileri yeniden çiz
 }
 function setZoom(z) {
   S.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
@@ -723,7 +773,7 @@ function renderProfile(v) {
       <label>E-posta<input value="${esc(me.email)}" disabled></label>
       <label>Ad Soyad<input name="full_name" required value="${esc(me.full_name)}"></label>
       <p class="muted">Ağaçtaki kişim: <b>${me.person_id && byId(me.person_id) ? esc(fullName(byId(me.person_id))) : "henüz bağlı değil (yöneticiye söyleyin)"}</b></p>
-      <p class="muted">Yetkiniz: ${me.is_admin ? "Yönetici (değişiklikler doğrudan uygulanır)" : me.can_add ? "Tam yetki: eklediğiniz kişiler hemen sizde görünür, diğer üyeler yönetici onayından sonra görür; diğer değişiklikler yönetici onayına düşer" : me.person_id ? "Kendi kaydını düzenleyebilir, kendi alt/üst soyuna ekleme önerebilir, bilgi notu paylaşabilir (yönetici onayına düşer)" : "Görüntüleme, bilgi notu ve fotoğraf ekleme"}</p>
+      <p class="muted">Yetkiniz: ${me.is_admin ? "Yönetici (değişiklikler doğrudan uygulanır)" : me.can_publish && me.can_add ? "Onaysız yetki: eklediğiniz kişi, eş ve notlar onay beklemeden yayınlanır (yöneticiye bildirim gider); düzenlemeler onaya düşer" : me.can_add ? "Tam yetki: eklediğiniz kişiler hemen sizde görünür, diğer üyeler yönetici onayından sonra görür; diğer değişiklikler yönetici onayına düşer" : me.person_id ? "Kendi kaydını düzenleyebilir, kendi alt/üst soyuna ekleme önerebilir, bilgi notu paylaşabilir (yönetici onayına düşer)" : "Görüntüleme, bilgi notu ve fotoğraf ekleme"}</p>
       <div class="actions"><button class="btn primary">Kaydet</button></div>
     </form></div>
     <div class="panel" style="margin-top:1rem"><h2>Önizleme ayarları</h2>
@@ -764,6 +814,7 @@ function renderMembers(v) {
         <div class="opts">
           <label><input type="checkbox" data-member="approved" data-id="${p.id}" ${p.approved ? "checked" : ""} ${self ? "disabled" : ""}> Onaylı</label>
           <label><input type="checkbox" data-member="can_add" data-id="${p.id}" ${p.can_add || p.is_admin ? "checked" : ""} ${p.is_admin ? "disabled" : ""}> Tam yetki</label>
+          <label title="Eklediği kişi, eş ve not onay beklemeden yayınlanır; yöneticiye yalnızca bildirim gider"><input type="checkbox" data-member="can_publish" data-id="${p.id}" ${p.can_publish && !p.is_admin ? "checked" : ""} ${p.is_admin ? "disabled" : ""}> Onaysız yetki</label>
           <label><input type="checkbox" data-member="is_admin" data-id="${p.id}" ${p.is_admin ? "checked" : ""} ${self ? "disabled" : ""}> Yönetici</label>
         </div></div>`;
     }).join("")}</div>`;
@@ -773,6 +824,8 @@ async function changeMember(el) {
   const patch = { [field]: el.checked };
   if (field === "is_admin" && el.checked) Object.assign(patch, { approved: true, can_add: true });
   if (field === "can_add" && el.checked) patch.approved = true;
+  if (field === "can_add" && !el.checked) patch.can_publish = false;
+  if (field === "can_publish" && el.checked) Object.assign(patch, { approved: true, can_add: true });
   const { error } = await sb.from("profiles").update(patch).eq("id", el.dataset.id);
   if (error) toast("Hata: " + error.message);
   await loadAll();
@@ -972,7 +1025,7 @@ async function openPerson(id) {
       ${canEditPerson(p) ? `<button type="button" class="btn" data-action="editPerson" data-id="${id}">Düzenle</button>` : ""}
       ${canDeletePerson(p) ? `<button type="button" class="btn danger" data-action="deletePerson" data-id="${id}" title="Ekledikten sonraki ilk 5 dakika içinde hemen silinir; sonrasında yönetici onayı gerekir">${instantNow(p) ? "Sil" : "Silme talebi"}</button>` : ""}
     </div>
-    ${isAdmin() ? "" : `<p class="muted small">${instantAdd() ? "Eklediğiniz kişiler hemen sizin ekranınızda görünür; diğer üyeler yönetici onayından sonra görür. Diğer değişiklikler yönetici onayından sonra uygulanır." : "Yaptığınız değişiklikler yönetici onayından sonra listeye eklenir."} Başkasının eklediği kaydı silemezsiniz, ama bilgi notu ekleyebilirsiniz.</p>`}
+    ${isAdmin() ? "" : `<p class="muted small">${isTrusted() ? "Onaysız yetkiniz var: eklediğiniz kişi, eş ve notlar hemen yayınlanır (yöneticiye bildirim gider). Düzenlemeler yönetici onayından sonra uygulanır." : instantAdd() ? "Eklediğiniz kişiler hemen sizin ekranınızda görünür; diğer üyeler yönetici onayından sonra görür. Diğer değişiklikler yönetici onayından sonra uygulanır." : "Yaptığınız değişiklikler yönetici onayından sonra listeye eklenir."} Başkasının eklediği kaydı silemezsiniz, ama bilgi notu ekleyebilirsiniz.</p>`}
     ${sideSection(p, spRows.length || impliedSp.length)}
     <h3>Bilgi notları <button type="button" class="btn small" data-action="addNote" data-id="${id}">+ Not</button></h3>
     ${notes.length ? notes.map((n) => `<div class="note"><div class="muted">${esc(n.author_name || profName(n.author_id) || "")} · ${fmtDT(n.created_at)}${ownerOk(n.author_id) ? ` <button type="button" class="mini" data-action="delNote" data-id="${n.id}" data-person="${id}" title="Notu sil (ilk 5 dakika hemen, sonra yönetici onayıyla)">×</button>` : ""}</div>${esc(n.body)}</div>`).join("") : `<p class="muted">Henüz not yok.</p>`}
@@ -1011,9 +1064,16 @@ async function saveInstant(req) {
     : await sb.rpc("add_spouse_pending", { a: req.payload.person_a, b: req.payload.person_b, mdate: req.payload.marriage_date || null, summary: req.summary });
   if (r.error) throw dbOld(r.error);
   notifyAdmin({ type: "request", id: r.data.request_id });
-  return { pending: true, instant: true, id: r.data.person_id || null };
+  const published = !!r.data.published;
+  return { pending: !published, published, instant: true, id: r.data.person_id || null };
 }
 async function saveChange(req) {
+  if (isTrusted() && req.kind === "add_note") {
+    const r = await sb.rpc("add_note_trusted", { pid: req.person_id, txt: req.payload.text, summary: req.summary });
+    if (r.error) throw dbOld(r.error);
+    notifyAdmin({ type: "request", id: r.data.request_id });
+    return { pending: false, published: true, id: req.person_id };
+  }
   if (instantAdd() && (req.kind === "add_person" || req.kind === "add_spouse")) return saveInstant(req);
   const ins = await sb.from("change_requests").insert({
     kind: req.kind, person_id: req.person_id || null, payload: req.payload, summary: req.summary,
@@ -1031,7 +1091,11 @@ async function saveChange(req) {
 async function finishChange(res, personId) {
   await loadAll();
   render();
-  if (res.instant) {
+  if (res.published) {
+    toast("Eklendi ve yayınlandı. Yöneticiye bildirim gitti.");
+    const id = res.id || personId;
+    if (id && byId(id)) openPerson(id); else closeModal();
+  } else if (res.instant) {
     toast("Eklendi. Şu an yalnızca siz görüyorsunuz; yönetici onaylayınca herkes görür.");
     const id = res.id || personId;
     if (id && byId(id)) openPerson(id); else closeModal();
@@ -1062,7 +1126,7 @@ function personForm(p, preset = {}) {
   const opt = (list, sel) => `<option value="">—</option>` + list.map((x) => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(fullName(x))} ${esc(years(x))}</option>`).join("");
   const dead = !!(v.is_deceased || v.death_date);
   showModal(`<h2>${p ? "Kişiyi düzenle" : "Yeni kişi"}</h2>
-    ${isAdmin() ? "" : !p && instantAdd() ? `<p class="muted small">Eklediğiniz kişi hemen sizin ekranınızda görünür; diğer üyeler yönetici onayından sonra görür.</p>` : ownPending ? `<p class="muted small">Bu kişi henüz yayınlanmadığı için değişiklikleriniz hemen uygulanır.</p>` : `<p class="muted small">Kaydettiğinizde değişiklik yönetici onayına gönderilir.</p>`}
+    ${isAdmin() ? "" : !p && isTrusted() ? `<p class="muted small">Onaysız yetkiniz var: eklediğiniz kişi hemen yayınlanır, yöneticiye yalnızca bildirim gider.</p>` : !p && instantAdd() ? `<p class="muted small">Eklediğiniz kişi hemen sizin ekranınızda görünür; diğer üyeler yönetici onayından sonra görür.</p>` : ownPending ? `<p class="muted small">Bu kişi henüz yayınlanmadığı için değişiklikleriniz hemen uygulanır.</p>` : `<p class="muted small">Kaydettiğinizde değişiklik yönetici onayına gönderilir.</p>`}
     <form data-form="person" data-id="${p?.id || ""}" data-spouse-of="${preset.spouseOf || ""}" data-father-of="${preset.fatherOf || ""}" data-mother-of="${preset.motherOf || ""}">
       <div class="row2"><label>Ad<input name="first_name" required value="${esc(v.first_name)}"></label>
         <label>Soyad<input name="last_name" value="${esc(v.last_name)}"></label></div>
@@ -1211,8 +1275,8 @@ function noteForm(id) {
   showModal(`<h2>${esc(fullName(byId(id)))} için bilgi notu</h2>
     <form data-form="note" data-id="${id}">
       <label>Not<textarea name="text" rows="5" required maxlength="2000" placeholder="Örn. Bu kişi hakkında hatıra, bilgi, düzeltme…"></textarea></label>
-      ${isAdmin() ? "" : `<p class="muted small">Notunuz yönetici onayından sonra herkese görünür.</p>`}
-      <div class="actions"><button type="button" class="btn" data-action="backToPerson" data-id="${id}">Vazgeç</button><button class="btn primary">${isAdmin() ? "Paylaş" : "Onaya gönder"}</button></div>
+      ${isAdmin() ? "" : isTrusted() ? `<p class="muted small">Notunuz hemen yayınlanır.</p>` : `<p class="muted small">Notunuz yönetici onayından sonra herkese görünür.</p>`}
+      <div class="actions"><button type="button" class="btn" data-action="backToPerson" data-id="${id}">Vazgeç</button><button class="btn primary">${isAdmin() || isTrusted() ? "Paylaş" : "Onaya gönder"}</button></div>
     </form>`);
 }
 async function submitNote(f) {
@@ -1229,7 +1293,8 @@ const KIND = { update_person: "Düzenleme", add_person: "Yeni kişi", add_spouse
 const STATUS = { pending: "⏳ Onay bekliyor", approved: "✅ Onaylandı", rejected: "❌ Reddedildi" };
 
 function reqRow(r, admin) {
-  return `<div class="req ${r.status}${String(r.kind).startsWith("delete_") ? " del" : ""}"><div class="req-top"><b>${esc(KIND[r.kind] || r.kind)}</b><span class="muted">${esc(r.requester_name || profName(r.requested_by))} · ${fmtDT(r.created_at)}</span></div>
+  const selectable = admin && r.status === "pending" && !isDelReq(r);
+  return `<div class="req ${r.status}${isDelReq(r) ? " del" : ""}"><div class="req-top"><b>${selectable ? `<input type="checkbox" class="sel" data-sel="${r.id}" ${S.sel.has(r.id) ? "checked" : ""} aria-label="Seç"> ` : ""}${esc(KIND[r.kind] || r.kind)}${r.status === "approved" && r.reviewed_by === r.requested_by ? ` <span class="muted small">(onaysız yetki, yayında)</span>` : ""}</b><span class="muted">${esc(r.requester_name || profName(r.requested_by))} · ${fmtDT(r.created_at)}</span></div>
     <div>${esc(r.summary || "")}</div>
     ${r.status !== "pending" ? `<div class="muted small">${STATUS[r.status]}${r.review_note ? ` · ${esc(r.review_note)}` : ""}</div>` : ""}
     ${r.status === "pending" && admin ? `<div class="actions"><button type="button" class="btn small" data-action="rejectReq" data-id="${r.id}">Reddet</button><button type="button" class="btn small primary" data-action="approveReq" data-id="${r.id}">Onayla</button></div>` : ""}
@@ -1239,16 +1304,49 @@ function myRequestsHtml() {
   const mine = S.requests.filter((r) => r.requested_by === S.user.id).slice(0, 30);
   return mine.length ? `<div class="reqlist">${mine.map((r) => reqRow(r, false)).join("")}</div>` : `<p class="muted">Henüz talebiniz yok.</p>`;
 }
+const isDelReq = (r) => String(r.kind).startsWith("delete_");
+// Toplu onaya uygun olanlar: bekleyen, silme olmayan talepler (en eskiden yeniye: önce ebeveyn sonra çocuk onaylansın)
+const bulkable = () => S.requests.filter((r) => r.status === "pending" && !isDelReq(r)).slice().reverse();
+function selCount() { const ok = new Set(bulkable().map((r) => r.id)); return [...S.sel].filter((id) => ok.has(id)).length; }
 function renderApprovals(v) {
   const pend = S.requests.filter((r) => r.status === "pending").slice().reverse();
   const done = S.requests.filter((r) => r.status !== "pending").slice(0, 40);
   const unann = S.requests.filter((r) => r.status === "approved" && !r.announced).length;
+  const bulk = bulkable();
+  const byUser = new Map();
+  bulk.forEach((r) => { const c = byUser.get(r.requested_by) || { name: r.requester_name || profName(r.requested_by) || "Üye", n: 0 }; c.n++; byUser.set(r.requested_by, c); });
   v.innerHTML = `<div class="panel wide"><h2>Onay bekleyen değişiklikler</h2>
-      <p class="muted">Üyelerin önerdiği değişiklikler burada toplanır. Tam yetkili üyelerin eklediği kişiler kendi ekranlarında zaten görünür; onayladığınızda herkese açılır. Silme talepleri yalnızca tek tek onaylanır; toplu silme yoktur. Yeni onaylanan değişiklikleri üyelere duyurmak için duyuru hazırlayın.</p>
-      <div class="actions wrap">${pend.length > 1 ? `<button type="button" class="btn" data-action="approveAll">Hepsini onayla (${pend.length})</button>` : ""}
-        <button type="button" class="btn primary" data-action="announceForm">📣 Güncelleme duyurusu hazırla${unann ? ` (${unann})` : ""}</button></div></div>
+      <p class="muted">Üyelerin önerdiği değişiklikler burada toplanır. Tam yetkili üyelerin eklediği kişiler kendi ekranlarında zaten görünür; onayladığınızda herkese açılır. Onaysız yetkideki üyelerin eklediği kayıtlar zaten yayındadır, yalnızca bildirim olarak gelir. <b>Silme talepleri toplu onaylanmaz</b>, tek tek onaylanır.</p>
+      <div class="actions wrap">
+        <button type="button" class="btn primary" data-action="approveAll" ${bulk.length ? "" : "disabled"}>✅ Hepsini onayla (${bulk.length})</button>
+        <button type="button" class="btn" id="selBtn" data-action="approveSel" ${selCount() ? "" : "disabled"}>Seçilenleri onayla (${selCount()})</button>
+        ${bulk.length ? `<label class="check selall"><input type="checkbox" id="selAll" ${selCount() === bulk.length ? "checked" : ""}>Tümünü seç</label>` : ""}
+        <button type="button" class="btn" data-action="announceForm">📣 Güncelleme duyurusu hazırla${unann ? ` (${unann})` : ""}</button></div>
+      ${byUser.size > 1 ? `<div class="chips">${[...byUser.entries()].map(([id, c]) => `<button type="button" class="chip" data-action="approveUser" data-id="${esc(id)}" title="Bu üyenin bekleyen tüm taleplerini onayla">✓ ${esc(c.name)} · ${c.n}</button>`).join("")}</div>` : ""}</div>
     <div class="reqlist">${pend.length ? pend.map((r) => reqRow(r, true)).join("") : `<p class="muted center">Bekleyen talep yok.</p>`}</div>
     ${done.length ? `<h3>Son işlemler</h3><div class="reqlist">${done.map((r) => reqRow(r, true)).join("")}</div>` : ""}`;
+}
+// Birden çok talebi sırayla onayla (bağımlılık hatasında yeniden dener)
+async function approveMany(ids, what) {
+  if (!ids.length) return toast("Onaylanacak talep yok.");
+  if (!confirm(`${ids.length} talep onaylansın mı?${what ? "\n\n" + what : ""}\n\n(Silme talepleri toplu onaylanmaz.)`)) return;
+  toast("Onaylanıyor…");
+  let left = ids.slice(), ok = 0, lastErr = "";
+  for (let pass = 0; pass < 3 && left.length; pass++) {
+    const next = [];
+    for (const id of left) {
+      const r = await sb.rpc("review_change", { req_id: id, approve: true, note: null });
+      if (r.error) { next.push(id); lastErr = r.error.message; } else ok++;
+    }
+    const stuck = next.length === left.length;
+    left = next;
+    if (stuck) break;
+  }
+  const doneIds = ids.filter((id) => !left.includes(id));
+  S.sel.clear();
+  await afterReview();
+  await cleanupStorage(doneIds);
+  toast(left.length ? `${ok} onaylandı, ${left.length} onaylanamadı: ${lastErr}` : `${ok} talep onaylandı`);
 }
 async function reviewReq(id, approve, note) {
   const r = await sb.rpc("review_change", { req_id: id, approve, note: note || null });
@@ -1760,15 +1858,9 @@ const actions = {
     if (note === null) return;
     if (await reviewReq(id, false, note)) { toast("Reddedildi"); await afterReview(); }
   },
-  approveAll: async () => {
-    const pend = S.requests.filter((r) => r.status === "pending").slice().reverse();
-    if (!confirm(`${pend.length} talebin hepsi onaylansın mı?`)) return;
-    const done = [];
-    for (const r of pend) { if (String(r.kind).startsWith("delete_")) continue; if (!(await reviewReq(r.id, true))) break; done.push(r.id); }
-    toast(pend.some((r) => String(r.kind).startsWith("delete_")) ? "Silme talepleri hariç onaylandı (silmeler tek tek onaylanır)" : "Onaylandı");
-    await afterReview();
-    await cleanupStorage(done);
-  },
+  approveAll: () => approveMany(bulkable().map((r) => r.id)),
+  approveSel: () => { const ok = new Set(bulkable().map((r) => r.id)); return approveMany([...S.sel].filter((id) => ok.has(id)), "Seçili talepler"); },
+  approveUser: (uid) => { const list = bulkable().filter((r) => r.requested_by === uid); return approveMany(list.map((r) => r.id), (list[0]?.requester_name || "Üye") + " kişisinin bekleyen talepleri"); },
   withdrawReq: async (id) => {
     if (!confirm("Talep geri çekilsin mi?")) return;
     const { error } = await sb.rpc("withdraw_request", { req_id: id });
@@ -1867,6 +1959,8 @@ document.addEventListener("change", (e) => {
   else if (t.dataset?.pref) { S.prefs[t.dataset.pref] = t.checked; savePrefs(); }
   else if (t.name === "is_deceased") { const b = t.closest("form")?.querySelector(".burialRow"); if (b) b.hidden = !t.checked; }
   else if (t.id === "genOn") { S.gen.on = t.checked; saveGen(); applyBands(); }
+  else if (t.dataset?.sel) { t.checked ? S.sel.add(t.dataset.sel) : S.sel.delete(t.dataset.sel); const b = document.getElementById("selBtn"); if (b) { const n = selCount(); b.textContent = `Seçilenleri onayla (${n})`; b.disabled = !n; } }
+  else if (t.id === "selAll") { const ids = bulkable().map((r) => r.id); S.sel = t.checked ? new Set(ids) : new Set(); renderView(); }
   else if (t.id === "iFilter") { S.iFilter = t.value; refreshInvites(); }
   else if (t.dataset?.memberPerson !== undefined) changeMemberPerson(t);
   else if (t.dataset?.member) changeMember(t);

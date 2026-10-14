@@ -43,11 +43,13 @@ Deno.serve(async (req) => {
       if (!me?.is_admin || !me.approved) return json({ error: "Yalnızca yönetici" }, 403);
       title = "Soyağacı"; text = "Test bildirimi: bildirimler çalışıyor ✅"; onlyUser = u.user.id;
     } else if (body.type === "request") {
-      const { data: r } = await admin.from("change_requests").select("id,kind,summary,requester_name,requested_by,status,notified")
+      const { data: r } = await admin.from("change_requests").select("id,kind,summary,requester_name,requested_by,status,notified,reviewed_by")
         .eq("id", body.id).maybeSingle();
-      if (!r || r.requested_by !== u.user.id || r.status !== "pending" || r.notified) return json({ ok: true, sent: 0 });
+      // bekleyen talep ya da "onaysız yetki" ile kendiliğinden yayınlanmış kayıt (yalnızca bilgi bildirimi)
+      const auto = r?.status === "approved" && r.reviewed_by === r.requested_by;
+      if (!r || r.requested_by !== u.user.id || (r.status !== "pending" && !auto) || r.notified) return json({ ok: true, sent: 0 });
       await admin.from("change_requests").update({ notified: true }).eq("id", r.id);
-      title = `Onay bekliyor: ${KIND[r.kind] ?? r.kind}`;
+      title = auto ? `Yeni kayıt eklendi (onaysız yetki): ${KIND[r.kind] ?? r.kind}` : `Onay bekliyor: ${KIND[r.kind] ?? r.kind}`;
       text = `${r.requester_name ?? "Bir üye"}: ${String(r.summary ?? "").slice(0, 160)}`;
     } else if (body.type === "signup") {
       const { data: p } = await admin.from("profiles").select("full_name,email,approved,created_at,signup_notified").eq("id", u.user.id).single();

@@ -51,6 +51,8 @@
 
 ### Kurallar (veritabanında zorlanır)
 - **Tam yetkili üye** eklediği kişi/eşi **kendi hesabında anında** görür (⏳ "onay bekliyor" işaretiyle). Diğer üyeler, yönetici **Onaylar** sekmesinden onaylayınca görür. Reddedilirse kayıt kaldırılır. Kişiyi eklediği için henüz yayınlanmamışsa üye onu doğrudan düzenleyebilir.
+- **Onaysız yetki** (tam yetkinin üstü; **Üyeler** sekmesinde "Onaysız yetki" kutusu): bu üyenin eklediği kişi, eş ve bilgi notu onay beklemeden herkese yayınlanır; yöneticiye yalnızca bildirim gider (Onaylar sekmesinde "onaysız yetki, yayında" notuyla da görünür). Üyenin düzenleme önerileri yine onaya düşer; silme kuralları aynen geçerlidir. Davet formundan atanmaz, kayıt olduktan sonra Üyeler sekmesinden verilir.
+- **Toplu onay** (Onaylar sekmesi): "Hepsini onayla", kutucuklarla "Seçilenleri onayla" ve üye adına göre "✓ Üye · n" düğmeleri. Silme talepleri toplu onaylanmaz.
 - Kendi kaydı + alt/üst soyu yetkisindeki üyelerin ekleme/düzenlemeleri eskisi gibi onay bekler, onaylanana dek kimse görmez.
 - **Başka kullanıcının eklediği kaydı kimse silemez** (yönetici dahil). Başkasının kaydına bilgi notu eklenebilir ya da düzenleme önerilebilir.
 - **Ekleyen kişi, eklediği kaydı ilk 5 dakika içinde hemen silebilir** (kişi, eşlik, bilgi notu, fotoğraf). 5 dakikadan sonra "Silme talebi" gönderilir; yönetici **Onaylar** sekmesinde tek tek onaylar. Onay bekleyen (henüz yayınlanmamış) kayıt süre sınırı olmadan geri çekilebilir. Başkalarının eklediği çocuk/not/fotoğraf bağlıysa kişi hemen silinmez, talep olur.
@@ -77,7 +79,7 @@ Yönetici onayına düşen her şey (yeni kişi/eş/not, düzenleme, silme taleb
 4. Telefonda siteyi uygulama olarak yükleyin (iPhone: Safari > Paylaş > Ana Ekrana Ekle, iOS 16.4+), yönetici olarak girin, **Profilim > Yönetici bildirimleri > Bildirimleri aç** deyin ve **Test bildirimi gönder** ile deneyin.
 
 ### Soy görünümü
-"Benim soyum"da atalar satırlarında eşler artık yan yana ve ♥ ile evli gösterilir (ör. Aslan ♥ Mevlüde, Ali ♥ Zeyne Karaman). "Kardeş, amca/hala" açıkken seçilen kişinin kardeşleri kendisiyle aynı satırda, büyükler solda küçükler sağda görünür.
+"Benim soyum"da ebeveynden çocuğa bağlantı çizgileri (üst soy dahil) çizilir; atalar satırlarında eşler artık yan yana ve ♥ ile evli gösterilir (ör. Aslan ♥ Mevlüde, Ali ♥ Zeyne Karaman). "Kardeş, amca/hala" açıkken seçilen kişinin kardeşleri kendisiyle aynı satırda, büyükler solda küçükler sağda görünür.
 
 ## Güncelleme (eski)
 Daha önce kurulum yaptıysanız, yeni dosyaları yüklemeden **önce** Supabase > SQL Editor'de `guncelleme.sql` içeriğini bir kez çalıştırın (şehir, vefat işareti, davetler, onay akışı, mezar yeri, kan grubu, bilgi notları ve güvenlik düzeltmesi içerir). Verileriniz silinmez, tekrar çalıştırmak zararsızdır.

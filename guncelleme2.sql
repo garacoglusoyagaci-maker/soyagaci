@@ -276,6 +276,14 @@ begin
 
   insert into public.change_requests (kind, person_id, payload, summary, requested_by, requester_name)
   values ('add_person', nid, p, summary, uid, rname) returning id into rid;
+  if public.can_publish() then
+    begin   -- onaysız yetki: hemen yayınlanır, yöneticiye yalnızca bildirim gider
+      perform public._approve_pending_person(nid);
+      update public.change_requests set status = 'approved', review_note = 'Onaysız yetkiyle eklendi', reviewed_by = uid, reviewed_at = now() where id = rid;
+      return jsonb_build_object('person_id', nid, 'request_id', rid, 'published', true);
+    exception when others then null;   -- ebeveyni henüz onay bekliyorsa kayıt bekleyen olarak kalır
+    end;
+  end if;
   return jsonb_build_object('person_id', nid, 'request_id', rid);
 end $$;
 
@@ -311,6 +319,11 @@ begin
   insert into public.change_requests (kind, person_id, payload, summary, requested_by, requester_name)
   values ('add_spouse', a, jsonb_build_object('person_a', a, 'person_b', b, 'marriage_date', mdate, 'spouse_row_id', sid),
           summary, uid, rname) returning id into rid;
+  if public.can_publish() and not exists (select 1 from public.people where id in (a, b) and approval = 'pending') then
+    update public.spouses set approval = 'approved' where id = sid;
+    update public.change_requests set status = 'approved', review_note = 'Onaysız yetkiyle eklendi', reviewed_by = uid, reviewed_at = now() where id = rid;
+    return jsonb_build_object('spouse_id', sid, 'request_id', rid, 'published', true);
+  end if;
   return jsonb_build_object('spouse_id', sid, 'request_id', rid);
 end $$;
 
@@ -591,6 +604,45 @@ begin
   exception when duplicate_object then null; when undefined_object then null; end;
 end $$;
 
+-- ---------- 5) Onaysız yetki (tam yetkinin üstü) ----------
+-- Bu yetkideki üyenin eklediği kişi / eş / bilgi notu onay beklemeden yayınlanır; yöneticiye yalnızca bildirim gider.
+-- Düzenleme ve silme kuralları değişmez (düzenlemeler onaya düşer, silme 5 dakika / yönetici onayı kuralına tabidir).
+alter table public.profiles add column if not exists can_publish boolean not null default false;
+
+create or replace function public.guard_profile() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and not public.is_admin() then
+    new.is_admin      := old.is_admin;
+    new.can_add       := old.can_add;
+    new.can_publish   := old.can_publish;
+    new.approved      := old.approved;
+    new.email         := old.email;
+    new.person_id     := old.person_id;  -- kişi bağlamayı yalnızca yönetici yapar
+  end if;
+  return new;
+end $$;
+
+create or replace function public.can_publish() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce((select approved and can_add and can_publish and not is_admin from public.profiles where id = auth.uid()), false)
+$$;
+
+create or replace function public.add_note_trusted(pid uuid, txt text, summary text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); rname text; rid uuid;
+begin
+  if not public.can_publish() then raise exception 'Onaysız yetkiniz yok'; end if;
+  if nullif(trim(txt), '') is null or length(txt) > 2000 then raise exception 'Not boş ya da çok uzun'; end if;
+  if not public.can_see_person(pid) then raise exception 'Kişi bulunamadı'; end if;
+  select coalesce(nullif(full_name,''), email) into rname from public.profiles where id = uid;
+  insert into public.person_notes (person_id, body, author_id, author_name) values (pid, trim(txt), uid, rname);
+  insert into public.change_requests (kind, person_id, payload, summary, status, review_note, requested_by, requester_name, reviewed_by, reviewed_at)
+  values ('add_note', pid, jsonb_build_object('text', trim(txt)), summary, 'approved', 'Onaysız yetkiyle eklendi', uid, rname, uid, now())
+  returning id into rid;
+  return jsonb_build_object('request_id', rid, 'published', true);
+end $$;
+
 -- ---------- Çağrı izinleri ----------
 do $$
 declare f text;
@@ -599,7 +651,7 @@ begin
     'add_person_pending(jsonb, text)', 'edit_pending_person(uuid, jsonb, text)',
     'add_spouse_pending(uuid, uuid, date, text)', 'request_delete(text, uuid)', 'withdraw_request(uuid)',
     'review_change(uuid, boolean, text)', 'admin_export(boolean)',
-    'save_push_subscription(text, text, text, text)'] loop
+    'save_push_subscription(text, text, text, text)', 'add_note_trusted(uuid, text, text)'] loop
     execute format('revoke all on function public.%s from public, anon', f);
     execute format('grant execute on function public.%s to authenticated', f);
   end loop;
