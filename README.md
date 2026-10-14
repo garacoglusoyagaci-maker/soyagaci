@@ -105,3 +105,9 @@ Daha önce kurulum yaptıysanız, yeni dosyaları yüklemeden **önce** Supabase
 - **iPhone (Safari):** Paylaş simgesi > "Ana Ekrana Ekle".
 - **Bilgisayar (Chrome/Edge):** Adres çubuğunun sağındaki yükle simgesi.
 Uygulama internet bağlantısı ister, çünkü veriler Supabase'de durur.
+
+### Soy görünümü (güncelleme 3)
+- "Anne ve baba / Dede ve nine…" yazıları solda, nesil etiketinin altında ve daha büyük.
+- Her ebeveyn→çocuk bağlantısı ayrı renkte; başında ve sonunda küçük yuvarlak top var.
+- "Satır aralığı ↕− / ↕+" düğmeleri (Benim soyum görünümü) satırlar arası boşluğu ayarlar; cihazda saklanır.
+- `sw.js` önbelleği v12: telefonlar yeni dosyaları alsın diye yükseltildi.

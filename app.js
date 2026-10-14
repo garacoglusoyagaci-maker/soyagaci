@@ -46,7 +46,7 @@ S.gen = loadGen();
 // Önizleme ayarları (bu cihazda saklanır)
 const PREF_LABELS = { photo: "Fotoğraf (büyütülmüş)", age: "Yaş (yıl ve ay)", city: "Yaşadığı şehir", burial: "Defin yeri (vefat edenler)", blood: "Kan grubu" };
 function loadPrefs() {
-  const d = { photo: true, age: true, city: true, burial: true, blood: true, start: "tree", dropSort: "age_old", treeStart: "auto", up: 3, down: 3, sibs: false };
+  const d = { photo: true, age: true, city: true, burial: true, blood: true, start: "tree", dropSort: "age_old", treeStart: "auto", up: 3, down: 3, sibs: false, rowgap: 56 };
   try { Object.assign(d, JSON.parse(localStorage.getItem("soyagaci_prefs") || "{}")); } catch (_) { /* yok sayılır */ }
   return d;
 }
@@ -434,6 +434,7 @@ function applyBands() {
 }
 
 // "Benim soyum": ebeveynden çocuğa bağlantı çizgileri (üst soy dahil). Kartların gerçek konumları ölçülüp SVG ile çizilir.
+const LINE_COLORS = ["#e6194b", "#3a7bd5", "#2e9e4f", "#f58231", "#8e44ad", "#00a3a3", "#c2185b", "#8d6e00", "#5d6bd8", "#d35400", "#1b8a5a", "#a0306f"];
 function drawLines() {
   const tree = document.querySelector(".tree");
   if (!tree) return;
@@ -466,7 +467,9 @@ function drawLines() {
   svg.setAttribute("class", "lines");
   svg.setAttribute("width", tree.scrollWidth);
   svg.setAttribute("height", tree.scrollHeight);
-  const path = (d) => { const e = document.createElementNS(NS, "path"); e.setAttribute("d", d); svg.append(e); };
+  const path = (d, col) => { const e = document.createElementNS(NS, "path"); e.setAttribute("d", d); e.style.stroke = col; svg.append(e); };
+  const dot = (x, y, col) => { const e = document.createElementNS(NS, "circle"); e.setAttribute("cx", x); e.setAttribute("cy", y); e.setAttribute("r", 4.5); e.style.fill = col; svg.append(e); };
+  let gi = 0;
   groups.forEach((g) => {
     const above = [g.f, g.m].filter(Boolean).filter((x) => x.bottom < Math.min(...g.kids.map((k) => k.top)));
     if (!above.length) return;
@@ -475,9 +478,12 @@ function drawLines() {
     const kidTop = Math.min(...g.kids.map((k) => k.wtop));
     const bus = ay + Math.min(14, Math.max(6, (kidTop - ay) / 2));
     const xs = [ax, ...g.kids.map((k) => k.cx)];
-    path(`M${ax} ${ay}V${bus}`);
-    if (Math.min(...xs) !== Math.max(...xs)) path(`M${Math.min(...xs)} ${bus}H${Math.max(...xs)}`);
-    g.kids.forEach((k) => path(`M${k.cx} ${bus}V${k.wtop}`));
+    const col = LINE_COLORS[gi++ % LINE_COLORS.length]; // her ebeveyn-çocuk bağlantısı ayrı renkte
+    path(`M${ax} ${ay}V${bus}`, col);
+    if (Math.min(...xs) !== Math.max(...xs)) path(`M${Math.min(...xs)} ${bus}H${Math.max(...xs)}`, col);
+    g.kids.forEach((k) => path(`M${k.cx} ${bus}V${k.wtop}`, col));
+    dot(ax, ay, col); // başlangıç topu
+    g.kids.forEach((k) => dot(k.cx, k.wtop, col)); // bitiş topları
   });
   tree.append(svg);
 }
@@ -621,9 +627,10 @@ function renderTree(v) {
       <span id="zoomPct" class="muted"></span>
       <button type="button" class="btn small" data-action="zoomIn" aria-label="Yakınlaştır">🔍+</button>
       <button type="button" class="btn small" data-action="zoomFit">Tümünü sığdır</button>
+      ${lin ? `<span class="muted">Satır aralığı</span><button type="button" class="btn small" data-action="gapLess" aria-label="Satır aralığını azalt">↕−</button><button type="button" class="btn small" data-action="gapMore" aria-label="Satır aralığını artır">↕+</button>` : ""}
       <button type="button" class="btn small" data-action="zoomReset">%100</button>
     </div>
-    <div class="tree-wrap"><div class="tree">${lin ? lineageHtml() : all ? forestHtml() : `<ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul>`}</div></div>
+    <div class="tree-wrap"><div class="tree" style="--rg:${Number(S.prefs.rowgap) || 56}px">${lin ? lineageHtml() : all ? forestHtml() : `<ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul>`}</div></div>
     </div>
     <p class="muted hint">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın (pencerede "🧬 Soyunu göster" ile o kişinin atalarını ve altsoyunu görürsünüz). Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
   applyBands();
@@ -1824,6 +1831,8 @@ const actions = {
     const b = document.querySelector('[data-action="toggleFull"]');
     if (b) b.textContent = S.treeFull ? "✕ Küçült" : "⛶ Tam ekran";
   },
+  gapMore: () => { S.prefs.rowgap = Math.min(160, (Number(S.prefs.rowgap) || 56) + 12); savePrefs(); renderView(); },
+  gapLess: () => { S.prefs.rowgap = Math.max(48, (Number(S.prefs.rowgap) || 56) - 12); savePrefs(); renderView(); },
   zoomIn: () => setZoom(S.zoom * 1.2),
   zoomOut: () => setZoom(S.zoom / 1.2),
   zoomReset: () => setZoom(1),
