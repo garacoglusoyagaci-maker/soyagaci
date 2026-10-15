@@ -132,3 +132,10 @@ Uygulama internet bağlantısı ister, çünkü veriler Supabase'de durur.
 - "Benim soyum"da evlenip gelenlerin (gelin/damat) anne babası artık üst satırlarda gösterilmez; yalnızca kan bağı olan kişilerin ebeveynleri gösterilir (kartın altında küçük "↑ anne babası" notu kalır).
 - Baba tarafı kartları mavi/lavanta, anne tarafı kartları yeşil/şeftali tonunda; zoom çubuğunda renk anahtarı var.
 - Supabase'de yeni işlem gerekmez.
+
+### Güncelleme 7
+- **Önce `guncelleme4.sql`** dosyasını Supabase > SQL Editor'de bir kez çalıştırın (hesap bazlı akrabalık adları + profil fotoğrafı).
+- Soy görünümünde "Gelin/damat ailesi" kutucuğu: işaretlenirse evlenip gelenlerin anne babası da gösterilir (varsayılan kapalı).
+- Akrabalık adları artık hesaba kaydedilir; her kullanıcı kendi düzenlediği adları görür.
+- Profilim > "Profil fotoğrafım": fotoğraf yükleyin; "Sadece ben / Tüm üyeler / Seçtiğim kişiler" ile kimin göreceğini seçin. İzin verilenler ağaçta kartınızda fotoğrafı görür.
+- Kartlarda doğum yılının yanında yaş (aynı boyutta) yazar.

@@ -7,7 +7,7 @@ const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
-const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fSur: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), view: "all", focus: null, viewInit: false, depthMax: Infinity, recipients: [], blog: [], dlog: [], sel: new Set(), backupBusy: false, prefs: loadPrefs() };
+const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fSur: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), avatars: new Map(), avatarRows: [], relNames: {}, fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), view: "all", focus: null, viewInit: false, depthMax: Infinity, recipients: [], blog: [], dlog: [], sel: new Set(), backupBusy: false, prefs: loadPrefs() };
 const startTab = () => (S.prefs.start === "list" ? "people" : "tree");
 S.tab = startTab();
 const BLOOD = ["A+", "A-", "B+", "B-", "AB+", "AB-", "0+", "0-"];
@@ -71,6 +71,17 @@ function ageText(p) {
   if (m < 0) return "";
   const t = `${Math.floor(m / 12)} yıl ${m % 12} ay`;
   return isDead(p) ? `${t} (vefat ettiğinde)` : t;
+}
+// Kartta doğum yılının yanında yazan yaş (vefat edenlerde vefat ettiği yaş)
+function ageShort(p) {
+  if (!p.birth_date) return "";
+  let end;
+  if (p.death_date) end = p.death_date;
+  else if (p.is_deceased) return "";
+  else end = todayStr();
+  const m = monthsBetween(p.birth_date, end);
+  if (m < 0) return "";
+  return m < 12 ? `${m} aylık` : `${Math.floor(m / 12)} yaş`;
 }
 function previewBits(p) {
   const out = [];
@@ -207,6 +218,21 @@ function initView() {
   S.fitPending = true;
 }
 
+const avUrlCache = new Map();
+async function loadAvatars() {
+  S.avatars = new Map(); S.avatarRows = [];
+  try {
+    const r = await sb.from("photos").select("id,person_id,storage_path,uploaded_by,visibility").eq("is_avatar", true);
+    if (r.error || !r.data?.length) return;
+    S.avatarRows = r.data;
+    const need = r.data.filter((x) => !(avUrlCache.get(x.storage_path) && Date.now() - avUrlCache.get(x.storage_path).t < 50 * 60 * 1000));
+    if (need.length) {
+      const { data: signed } = await sb.storage.from("photos").createSignedUrls(need.map((x) => x.storage_path), 3600);
+      (signed || []).forEach((s) => avUrlCache.set(s.path, { url: s.signedUrl, t: Date.now() }));
+    }
+    r.data.forEach((x) => { const c = avUrlCache.get(x.storage_path); if (c?.url) S.avatars.set(x.person_id, c.url); });
+  } catch (_) { /* yok sayılır */ }
+}
 async function loadAll() {
   const [pr, pe, sp, rq, nt, ph] = await Promise.all([
     sb.from("profiles").select("*").order("full_name"),
@@ -214,12 +240,14 @@ async function loadAll() {
     sb.from("spouses").select("*"),
     sb.from("change_requests").select("*").order("created_at", { ascending: false }).limit(300),
     sb.from("person_notes").select("*").order("created_at"),
-    sb.from("photos").select("person_id"),
+    sb.from("photos").select("person_id,is_avatar"),
   ]);
+  let phRows = ph.data;
+  if (ph.error) phRows = (await sb.from("photos").select("person_id")).data; // guncelleme4.sql henüz çalışmadıysa
   if (rq.error) toast("Talepler yüklenemedi (guncelleme.sql çalıştırıldı mı?): " + rq.error.message);
   S.requests = rq.data || [];
   S.notes = nt.data || [];
-  S.photoSet = new Set((ph.data || []).map((x) => x.person_id));
+  S.photoSet = new Set((phRows || []).filter((x) => !x.is_avatar).map((x) => x.person_id));
   if (pr.error) toast("Veri yüklenemedi: " + pr.error.message);
   S.profiles = pr.data || [];
   S.people = pe.data || [];
@@ -233,6 +261,11 @@ async function loadAll() {
   S.people.forEach((x) => ["father_id", "mother_id"].forEach((k) => { if (x[k] && !seenIds.has(x[k])) { x["_h" + k] = true; x[k] = null; } }));
   S.spouses = sp.data || [];
   S.me = S.profiles.find((p) => p.id === S.user.id) || null;
+  await loadAvatars();
+  try {
+    const up = await sb.from("user_prefs").select("rel_names").eq("user_id", S.user.id).maybeSingle();
+    S.relNames = (!up.error && up.data?.rel_names) || S.prefs.relNames || {};
+  } catch (_) { S.relNames = S.prefs.relNames || {}; }
   S.invites = [];
   if (S.me?.is_admin) {
     const iv = await sb.from("invites").select("*");
@@ -321,7 +354,7 @@ function renderView() {
   v.classList.toggle("wide", S.tab === "tree"); // ağaç sekmesi tüm genişliği kullanır
   if (S.tab === "tree") renderTree(v);
   else if (S.tab === "people") renderPeople(v);
-  else if (S.tab === "profile") { renderProfile(v); if (S.me.is_admin) updatePushBox(); }
+  else if (S.tab === "profile") { renderProfile(v); renderAvatarBox(); if (S.me.is_admin) updatePushBox(); }
   else if (S.tab === "members") renderMembers(v);
   else if (S.tab === "invites") renderInvites(v);
   else if (S.tab === "approvals") renderApprovals(v);
@@ -340,7 +373,7 @@ function card(id) {
   if (!p) return "";
   return `<button type="button" class="pcard ${genderCls(p)}${isDead(p) ? " dead" : ""}${isPending(p) ? " pend" : ""}" data-action="open" data-id="${id}">${isPending(p) ? `<span class="pk" title="Yönetici onayı bekliyor: şu an yalnızca siz ve yönetici görüyorsunuz">⏳</span>` : ""}
     ${isDead(p) ? `<span class="dm" title="Vefat etti. Allah rahmet eylesin">&#9770;&#xFE0E;</span>` : ""}${S.photoSet.has(id) ? `<span class="cm" title="Fotoğraf var">📷</span>` : ""}${p.hidden_for ? `<span class="lk" title="${esc(hiddenLabel(p))}">🔒</span>` : ""}
-    <span class="av">${esc((p.first_name || "?")[0])}</span><span class="nm">${esc(fullName(p))}</span>${p.maiden_name ? `<small class="mn">kızlık soyadı: ${esc(p.maiden_name)}</small>` : ""}<small>${esc(years(p))}</small></button>`;
+    <span class="av${S.avatars.get(id) ? " img" : ""}">${S.avatars.get(id) ? `<img src="${esc(S.avatars.get(id))}" alt="" loading="lazy">` : esc((p.first_name || "?")[0])}</span><span class="nm">${esc(fullName(p))}</span>${p.maiden_name ? `<small class="mn">kızlık soyadı: ${esc(p.maiden_name)}</small>` : ""}<small>${esc([years(p), ageShort(p)].filter(Boolean).join(" · "))}</small></button>`;
 }
 
 // Kartın altında "↑ Baba & Anne" bağlantıları (ağaçta üstte görünmeyen ebeveynler için)
@@ -501,13 +534,13 @@ function buildSibship(pid, d, anchor, ctx, side = null) {
   else units = [...sibU, mainU].sort((x, y) => kidCmp(byId(x.main), byId(y.main)));
   // üst satır: her kişinin (ve eşlerinin) ebeveyn çifti, kartların sırasına göre yan yana "yuva"lar halinde
   const slots = [];
-  const slotFor = (person) => {
+  const slotFor = (person, inlaw = false) => {
     const f = byId(person.father_id), m = byId(person.mother_id);
     const fo = f && !ctx.placed.has(f.id), mo = m && !ctx.placed.has(m.id);
     if (!fo && !mo) return;
     if (d >= ctx.up) { ctx.trunc = true; return; }
     if (fo && mo) {
-      const fb = buildSibship(f.id, d + 1, "R", ctx, d === 0 ? "P" : side), mb = buildSibship(m.id, d + 1, "L", ctx, d === 0 ? "M" : side);
+      const fb = buildSibship(f.id, d + 1, "R", ctx, inlaw ? "I" : d === 0 ? "P" : side), mb = buildSibship(m.id, d + 1, "L", ctx, inlaw ? "I" : d === 0 ? "M" : side);
       const n = newNode();
       n.w = fb.w + LN.AMP + mb.w;
       absorb(n, fb, 0);
@@ -515,10 +548,10 @@ function buildSibship(pid, d, anchor, ctx, side = null) {
       const fc = n.cards.find((c) => c.id === f.id), mc = n.cards.find((c) => c.id === m.id);
       n.frames.push({ ids: [f.id, m.id], x0: fc.x - LN.CW / 2 - LN.PAD, x1: mc.x + LN.CW / 2 + LN.PAD, lv: -(d + 1) });
       slots.push(n);
-    } else slots.push(buildSibship((fo ? f : m).id, d + 1, "C", ctx, d === 0 ? (fo ? "P" : "M") : side));
+    } else slots.push(buildSibship((fo ? f : m).id, d + 1, "C", ctx, inlaw ? "I" : d === 0 ? (fo ? "P" : "M") : side));
   };
   // yalnızca kan bağı olan kişilerin ebeveynleri gösterilir; gelinin/damadın (evlenip gelenlerin) anne babası gösterilmez
-  units.forEach((u) => slotFor(byId(u.main)));
+  units.forEach((u) => { slotFor(byId(u.main)); if (ctx.inlaws) u.ids.filter((id) => id !== u.main).forEach((id) => slotFor(byId(id), true)); });
   const rowW = units.reduce((s, u) => s + unitW(u), 0) + LN.GAP * (units.length - 1);
   const upW = slots.reduce((s, n) => s + n.w, 0) + LN.GAP * Math.max(0, slots.length - 1);
   const w = Math.max(rowW, upW);
@@ -574,7 +607,7 @@ function buildKid(u, k, ctx) {
 }
 function lineageModel() {
   const fid = S.focus;
-  const ctx = { placed: new Set(), up: Number(S.prefs.up), down: Number(S.prefs.down), sibs: !!S.prefs.sibs, trunc: false };
+  const ctx = { placed: new Set(), up: Number(S.prefs.up), down: Number(S.prefs.down), sibs: !!S.prefs.sibs, inlaws: !!S.prefs.inlaws, trunc: false };
   const sib = buildSibship(fid, 0, "C", ctx);
   const root = newNode();
   absorb(root, sib, 0);
@@ -725,6 +758,7 @@ function renderTree(v) {
       <label class="inl">Yukarı <select data-lin="up">${optN(S.prefs.up)}</select> nesil</label>
       <label class="inl">Aşağı <select data-lin="down">${optN(S.prefs.down)}</select> nesil</label>
       <label class="inl"><input type="checkbox" data-lin="sibs" ${S.prefs.sibs ? "checked" : ""}> Kardeş, amca/hala/dayı/teyze</label>
+      <label class="inl"><input type="checkbox" data-lin="inlaws" ${S.prefs.inlaws ? "checked" : ""}> Gelin/damat ailesi</label>
       ${myP && S.focus !== myP ? `<button type="button" class="btn" data-action="focusOn" data-id="${myP}">🙋 Bana dön</button>` : ""}`
     : `<select id="rootSel" aria-label="Başlangıç kişisi"><option value="all" ${all ? "selected" : ""}>Tüm kişiler (tam ağaç)</option>${personOpts(S.rootId)}</select>
       ${up ? `<button type="button" class="btn" data-action="goUp">↑ Üst nesil</button>` : ""}`;
@@ -919,6 +953,7 @@ function renderProfile(v) {
       <p class="muted">Yetkiniz: ${me.is_admin ? "Yönetici (değişiklikler doğrudan uygulanır)" : me.can_publish && me.can_add ? "Onaysız yetki: eklediğiniz kişi, eş ve notlar onay beklemeden yayınlanır (yöneticiye bildirim gider); düzenlemeler onaya düşer" : me.can_add ? "Tam yetki: eklediğiniz kişiler hemen sizde görünür, diğer üyeler yönetici onayından sonra görür; diğer değişiklikler yönetici onayına düşer" : me.person_id ? "Kendi kaydını düzenleyebilir, kendi alt/üst soyuna ekleme önerebilir, bilgi notu paylaşabilir (yönetici onayına düşer)" : "Görüntüleme, bilgi notu ve fotoğraf ekleme"}</p>
       <div class="actions"><button class="btn primary">Kaydet</button></div>
     </form></div>
+    ${me.person_id && byId(me.person_id) ? `<div class="panel" style="margin-top:1rem"><h2>Profil fotoğrafım</h2><div id="avBox" class="muted">Yükleniyor…</div></div>` : ""}
     <div class="panel" style="margin-top:1rem"><h2>Önizleme ayarları</h2>
       <p class="muted">Kişinin üzerine gelince açılan önizlemede ve listede hangi bilgiler görünsün? (Bu cihazda saklanır.)</p>
       ${Object.entries(PREF_LABELS).map(([k, t]) => `<label class="check"><input type="checkbox" data-pref="${k}" ${S.prefs[k] ? "checked" : ""}>${t}</label>`).join("")}
@@ -935,6 +970,71 @@ function renderProfile(v) {
           : `<p class="muted"><b>Android (Chrome):</b> ⋮ menü &gt; "Uygulamayı yükle" veya "Ana ekrana ekle".<br><b>iPhone (Safari):</b> Paylaş simgesi &gt; "Ana Ekrana Ekle".<br><b>Bilgisayar (Chrome/Edge):</b> Adres çubuğunun sağındaki yükle simgesi.</p>`}
     </div>
     <div class="panel" style="margin-top:1rem"><button type="button" class="btn danger" data-action="logout">Çıkış yap</button></div>`;
+}
+async function renderAvatarBox() {
+  const box = document.getElementById("avBox");
+  if (!box) return;
+  const cur = S.avatarRows.find((r) => r.uploaded_by === S.user.id);
+  let viewers = [];
+  if (cur?.visibility === "custom") viewers = ((await sb.from("photo_viewers").select("user_id").eq("photo_id", cur.id)).data || []).map((x) => x.user_id);
+  const p = byId(S.me.person_id);
+  box.classList.remove("muted");
+  box.innerHTML = `<p class="muted">Fotoğrafınız varsayılan olarak yalnızca <b>size</b> görünür. Ağaçtaki kartınızda başkalarının görmesini siz onaylarsınız: aşağıdan kimlerin görebileceğini seçin.</p>
+    <div class="avprev"><span class="av big${S.avatars.get(p.id) ? " img" : ""}">${S.avatars.get(p.id) ? `<img src="${esc(S.avatars.get(p.id))}" alt="">` : esc((p.first_name || "?")[0])}</span><b>${esc(fullName(p))}</b></div>
+    <form data-form="avatar">
+      <label>${cur ? "Fotoğrafı değiştir (isteğe bağlı)" : "Fotoğraf seç"}<input type="file" name="file" accept="image/*"></label>
+      ${visibilityFields(cur?.visibility || "private", viewers)}
+      <div class="actions">${cur ? `<button type="button" class="btn" data-action="removeAvatar">Fotoğrafı kaldır</button>` : ""}<button class="btn primary">Kaydet</button></div>
+    </form>`;
+}
+async function submitAvatar(f) {
+  const file = f.elements.file.files[0];
+  const cur = S.avatarRows.find((r) => r.uploaded_by === S.user.id);
+  if (!file && !cur) return toast("Önce bir fotoğraf seçin.");
+  const vis = f.elements.visibility.value;
+  const btn = f.querySelector("button.primary");
+  btn.disabled = true;
+  let path = null;
+  try {
+    if (file) {
+      const blob = await compress(file, 800);
+      path = `${S.user.id}/${crypto.randomUUID()}.jpg`;
+      const up = await sb.storage.from("photos").upload(path, blob, { contentType: "image/jpeg" });
+      if (up.error) throw up.error;
+    }
+    let id = cur?.id;
+    if (cur) {
+      const u = await sb.from("photos").update({ visibility: vis, ...(path ? { storage_path: path } : {}) }).eq("id", id);
+      if (u.error) throw u.error;
+    } else {
+      const ins = await sb.from("photos").insert({ person_id: S.me.person_id, storage_path: path, caption: "Profil fotoğrafı", visibility: vis, is_avatar: true }).select().single();
+      if (ins.error) throw ins.error;
+      id = ins.data.id;
+    }
+    const d = await sb.from("photo_viewers").delete().eq("photo_id", id);
+    if (d.error) throw d.error;
+    if (vis === "custom") {
+      const ids = pickedViewers(f);
+      if (ids.length) { const r = await sb.from("photo_viewers").insert(ids.map((u) => ({ photo_id: id, user_id: u }))); if (r.error) throw r.error; }
+    }
+    if (path && cur) { try { await sb.storage.from("photos").remove([cur.storage_path]); } catch (_) { /* yok sayılır */ } }
+    await loadAll();
+    render();
+    toast("Profil fotoğrafı kaydedildi");
+  } catch (err) {
+    if (path && !cur) { try { await sb.storage.from("photos").remove([path]); } catch (_) { /* yok sayılır */ } }
+    toast("Hata: " + (err.message || err) + (String(err.message || "").includes("is_avatar") ? " (guncelleme4.sql çalıştırıldı mı?)" : ""));
+    btn.disabled = false;
+  }
+}
+async function removeAvatar() {
+  if (!confirm("Profil fotoğrafınız kaldırılsın mı?")) return;
+  const { data, error } = await sb.rpc("remove_my_avatar");
+  if (error) return toast("Hata: " + error.message);
+  if (data) { try { await sb.storage.from("photos").remove([data]); } catch (_) { /* yok sayılır */ } }
+  await loadAll();
+  render();
+  toast("Kaldırıldı");
 }
 async function submitProfile(f) {
   const { error } = await sb.from("profiles").update({ full_name: f.elements.full_name.value.trim() }).eq("id", S.user.id);
@@ -1142,7 +1242,7 @@ async function copyInvite() {
 const REL_KEYS = ["Kendisi", "Eşi", "Babası", "Annesi", "Ebeveyni", "Dedesi", "Babaannesi", "Anneannesi", "Dede/ninesi", "Büyük dedesi", "Büyük ninesi", "Büyük dede/ninesi",
   "Oğlu", "Kızı", "Çocuğu", "Torunu", "Torununun çocuğu", "Erkek kardeşi", "Kız kardeşi", "Kardeşi", "Amcası", "Halası", "Amca/halası", "Dayısı", "Teyzesi", "Dayı/teyzesi", "Yeğeni",
   "Amcasının çocuğu", "Halasının çocuğu", "Dayısının çocuğu", "Teyzesinin çocuğu", "Dede/nine kardeşi", "Yengesi", "Eniştesi", "Gelini", "Damadı", "Kayınpederi", "Kayınvalidesi", "Eşinin akrabası"];
-const relName = (k) => (S.prefs.relNames && S.prefs.relNames[k]) || k;
+const relName = (k) => (S.relNames && S.relNames[k]) || k;
 function ancMap(id, max = 9) {
   const m = new Map([[id, { d: 0, via: null }]]);
   let cur = [id];
@@ -1220,19 +1320,24 @@ function relationTo(fid, xid) {
   return null;
 }
 function relForm() {
-  const cur = S.prefs.relNames || {};
+  const cur = S.relNames || {};
   showModal(`<h2>Akrabalık adları</h2>
-    <p class="muted">"Benim soyum" görünümünde bir kişinin üzerine gelince seçili kişiye göre akrabalığı yazılır. Adı değiştirmek için kutuya yazın (boş bırakırsanız varsayılan kullanılır). Ayar bu cihazda saklanır.</p>
+    <p class="muted">"Benim soyum" görünümünde bir kişinin üzerine gelince seçili kişiye göre akrabalığı yazılır. Adı değiştirmek için kutuya yazın (boş bırakırsanız varsayılan kullanılır). Bu adlar hesabınıza kaydedilir; yalnızca siz bu şekilde görürsünüz.</p>
     <div class="relnames">${REL_KEYS.map((k, i) => `<label><span>${esc(k)}</span><input data-relkey="${i}" placeholder="${esc(k)}" value="${esc(cur[k] || "")}"></label>`).join("")}</div>
     <div class="actions"><button type="button" class="btn" data-action="relReset">Varsayılana dön</button><button type="button" class="btn primary" data-action="saveRelNames">Kaydet</button></div>`, "pwide");
 }
-function saveRelNames() {
+async function persistRelNames(o) {
+  S.relNames = o;
+  const r = await sb.from("user_prefs").upsert({ user_id: S.user.id, rel_names: o, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  if (r.error) { S.prefs.relNames = o; savePrefs(); return false; } // tablo yoksa bu cihaza kaydedilir
+  return true;
+}
+async function saveRelNames() {
   const o = {};
   document.querySelectorAll("[data-relkey]").forEach((i) => { const v = i.value.trim(), k = REL_KEYS[Number(i.dataset.relkey)]; if (v && v !== k) o[k] = v; });
-  S.prefs.relNames = o;
-  savePrefs();
+  const ok = await persistRelNames(o);
   closeModal();
-  toast("Kaydedildi");
+  toast(ok ? "Kaydedildi (hesabınıza)" : "Bu cihaza kaydedildi (hesaba kaydetmek için guncelleme4.sql çalıştırın)");
 }
 
 // ---------- kişi ayrıntısı ----------
@@ -2109,7 +2214,7 @@ const actions = {
   quickInviteSave: (id, el) => quickInviteSave(id, el),
   relForm: () => relForm(),
   saveRelNames: () => saveRelNames(),
-  relReset: () => { S.prefs.relNames = {}; savePrefs(); relForm(); toast("Varsayılan adlara dönüldü"); },
+  relReset: async () => { await persistRelNames({}); relForm(); toast("Varsayılan adlara dönüldü"); },
   genReset: () => { S.gen.colors = []; saveGen(); applyBands(); genForm(); },
   pickCity: (k) => { S.fCity = S.fCity === k ? "" : k; renderView(); },
   clearFilters: () => { S.q = ""; S.fCity = ""; S.fSur = ""; S.fGender = ""; S.fStatus = ""; S.fBlood = ""; renderView(); },
@@ -2198,6 +2303,7 @@ const actions = {
   },
   pushOn, pushOff, pushTest,
   addPhoto: (id) => photoUploadForm(id),
+  removeAvatar: () => removeAvatar(),
   editPhoto: (id, el) => photoEditForm(id, el.dataset.person),
   delPhoto: (id, el) => deletePhoto(id, el.dataset.person),
 };
@@ -2212,7 +2318,7 @@ document.addEventListener("click", async (e) => {
   if (fn) await fn(el.dataset.id, el);
 });
 
-const forms = { auth: submitAuth, person: submitPerson, spouse: submitSpouse, upload: submitUpload, photoedit: submitPhotoEdit, profile: submitProfile, note: submitNote };
+const forms = { auth: submitAuth, person: submitPerson, spouse: submitSpouse, upload: submitUpload, photoedit: submitPhotoEdit, profile: submitProfile, avatar: submitAvatar, note: submitNote };
 document.addEventListener("submit", async (e) => {
   const f = e.target;
   if (!f.dataset?.form) return;
