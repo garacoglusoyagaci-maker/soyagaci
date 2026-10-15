@@ -111,3 +111,11 @@ Uygulama internet bağlantısı ister, çünkü veriler Supabase'de durur.
 - Her ebeveyn→çocuk bağlantısı ayrı renkte; başında ve sonunda küçük yuvarlak top var.
 - "Satır aralığı ↕− / ↕+" düğmeleri (Benim soyum görünümü) satırlar arası boşluğu ayarlar; cihazda saklanır.
 - `sw.js` önbelleği v12: telefonlar yeni dosyaları alsın diye yükseltildi.
+
+### Güncelleme 4: soy düzeni, kızlık soyadı
+- **Önce `guncelleme3.sql`** dosyasını Supabase > SQL Editor'de bir kez çalıştırın (maiden_name alanı).
+- Soy görünümünde çocuklar tam ebeveynlerinin altında; çizgi çiftin ortasına değil, çocuk olan kişinin kartına iner.
+- Bir kişinin üzerine gelince (fare) onun ebeveyn/çocuk çizgileri belirginleşir, diğerleri soluklaşır.
+- Yakınlaştırma artık `transform` ile yapılır: iPhone'da yazılar kartların dışına taşmaz.
+- Kişi formunda "Evlenmeden önceki soyadı"; kartlarda ve listede gösterilir, aramada ve soyad filtresinde bulunur.
+- Kişiler sekmesinde sıralama: "Soyadına göre (A → Z, gruplu)".

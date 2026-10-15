@@ -7,17 +7,20 @@ const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const toastEl = document.getElementById("toast");
 
-const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), view: "all", focus: null, viewInit: false, depthMax: Infinity, recipients: [], blog: [], dlog: [], sel: new Set(), backupBusy: false, prefs: loadPrefs() };
+const S = { user: null, me: null, people: [], spouses: [], profiles: [], tab: "tree", rootId: null, q: "", zoom: 1, fCity: "", fSur: "", fGender: "", fStatus: "", gen: { on: true, colors: [] }, maxGen: 0, invites: [], iq: "", iFilter: "", treeFull: false, requests: [], notes: [], photoSet: new Set(), fBlood: "", sort: "alpha", bloodMissing: false, fitPending: true, attached: new Map(), view: "all", focus: null, viewInit: false, depthMax: Infinity, recipients: [], blog: [], dlog: [], sel: new Set(), backupBusy: false, prefs: loadPrefs() };
 const startTab = () => (S.prefs.start === "list" ? "people" : "tree");
 S.tab = startTab();
 const BLOOD = ["A+", "A-", "B+", "B-", "AB+", "AB-", "0+", "0-"];
-const SORTS = { alpha: "Alfabetik (A → Z)", age_old: "Yaşa göre (büyükten küçüğe)", age_young: "Yaşa göre (küçükten büyüğe)", created_old: "Kayıt sırası (ilk eklenen önce)", created_new: "Kayıt sırası (son eklenen önce)", family: "Aile içi sıralama" };
+const SORTS = { alpha: "Alfabetik (A → Z)", age_old: "Yaşa göre (büyükten küçüğe)", age_young: "Yaşa göre (küçükten büyüğe)", created_old: "Kayıt sırası (ilk eklenen önce)", created_new: "Kayıt sırası (son eklenen önce)", family: "Aile içi sıralama", surname: "Soyadına göre (A → Z, gruplu)" };
 const VIS = { all: "Tüm üyeler", private: "Sadece ben", custom: "Seçili kişiler" };
 
 // ---------- yardımcılar ----------
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const byId = (id) => S.people.find((p) => p.id === id);
 const fullName = (p) => (p ? [p.first_name, p.last_name].filter(Boolean).join(" ") : "");
+const displayName = (p) => (p ? fullName(p) + (p.maiden_name ? ` (${p.maiden_name})` : "") : "");
+const surOf = (p) => String(p.last_name || "").trim();
+const surnames = () => [...new Set(S.people.flatMap((p) => [surOf(p), String(p.maiden_name || "").trim()]).filter(Boolean))].sort((x, y) => x.localeCompare(y, "tr"));
 const yr = (d) => (d ? String(d).slice(0, 4) : "");
 const isDead = (p) => !!(p.is_deceased || p.death_date);
 const years = (p) => {
@@ -46,7 +49,7 @@ S.gen = loadGen();
 // Önizleme ayarları (bu cihazda saklanır)
 const PREF_LABELS = { photo: "Fotoğraf (büyütülmüş)", age: "Yaş (yıl ve ay)", city: "Yaşadığı şehir", burial: "Defin yeri (vefat edenler)", blood: "Kan grubu" };
 function loadPrefs() {
-  const d = { photo: true, age: true, city: true, burial: true, blood: true, start: "tree", dropSort: "age_old", treeStart: "auto", up: 3, down: 3, sibs: false, rowgap: 56 };
+  const d = { photo: true, age: true, city: true, burial: true, blood: true, start: "tree", dropSort: "age_old", treeStart: "auto", up: 3, down: 3, sibs: false, rowgap: 76 };
   try { Object.assign(d, JSON.parse(localStorage.getItem("soyagaci_prefs") || "{}")); } catch (_) { /* yok sayılır */ }
   return d;
 }
@@ -337,7 +340,7 @@ function card(id) {
   if (!p) return "";
   return `<button type="button" class="pcard ${genderCls(p)}${isDead(p) ? " dead" : ""}${isPending(p) ? " pend" : ""}" data-action="open" data-id="${id}">${isPending(p) ? `<span class="pk" title="Yönetici onayı bekliyor: şu an yalnızca siz ve yönetici görüyorsunuz">⏳</span>` : ""}
     ${isDead(p) ? `<span class="dm" title="Vefat etti. Allah rahmet eylesin">&#9770;&#xFE0E;</span>` : ""}${S.photoSet.has(id) ? `<span class="cm" title="Fotoğraf var">📷</span>` : ""}${p.hidden_for ? `<span class="lk" title="${esc(hiddenLabel(p))}">🔒</span>` : ""}
-    <span class="av">${esc((p.first_name || "?")[0])}</span><span class="nm">${esc(fullName(p))}</span><small>${esc(years(p))}</small></button>`;
+    <span class="av">${esc((p.first_name || "?")[0])}</span><span class="nm">${esc(fullName(p))}</span>${p.maiden_name ? `<small class="mn">kızlık soyadı: ${esc(p.maiden_name)}</small>` : ""}<small>${esc(years(p))}</small></button>`;
 }
 
 // Kartın altında "↑ Baba & Anne" bağlantıları (ağaçta üstte görünmeyen ebeveynler için)
@@ -401,11 +404,11 @@ function nodeHtml(id, seen, isRoot = false, depth = 0, side = null) {
 // Nesil bantları: her nesil için tüm genişlikte yatay zemin rengi
 function applyBands() {
   const tree = document.querySelector(".tree");
-  if (!tree) return;
+  if (!tree || tree.classList.contains("lin")) return;
   tree.querySelectorAll(".gband").forEach((b) => b.remove());
   if (!S.gen.on) return;
-  const prevZoom = tree.style.zoom;
-  tree.style.zoom = 1; // ölçümü gerçek boyutta yap
+  const prevT = tree.style.transform;
+  tree.style.transform = "none"; // ölçümü gerçek boyutta yap
   const base = tree.getBoundingClientRect().top;
   const rows = new Map();
   tree.querySelectorAll(".couple[data-gen], .ancrow[data-gen]").forEach((c) => {
@@ -430,62 +433,7 @@ function applyBands() {
     el.innerHTML = `<span>${g + 1}. nesil</span>`;
     tree.prepend(el);
   });
-  tree.style.zoom = prevZoom;
-}
-
-// "Benim soyum": ebeveynden çocuğa bağlantı çizgileri (üst soy dahil). Kartların gerçek konumları ölçülüp SVG ile çizilir.
-const LINE_COLORS = ["#e6194b", "#3a7bd5", "#2e9e4f", "#f58231", "#8e44ad", "#00a3a3", "#c2185b", "#8d6e00", "#5d6bd8", "#d35400", "#1b8a5a", "#a0306f"];
-function drawLines() {
-  const tree = document.querySelector(".tree");
-  if (!tree) return;
-  tree.querySelectorAll(".lines").forEach((x) => x.remove());
-  if (S.view !== "lineage") return;
-  const base = tree.getBoundingClientRect();
-  const z = base.width / (tree.offsetWidth || 1) || 1; // ekrandaki yakınlaştırma oranı: ölçümler ağacın kendi koordinatına çevrilir
-  const box = new Map(); // kişi -> { cx, top, bottom (kart), ctop, cbottom (çift/kart kabı) }
-  tree.querySelectorAll(".pcard[data-id]").forEach((el) => {
-    if (el.closest("ul ul") || el.classList.contains("ghost")) return; // alt soy zaten CSS çizgileriyle bağlı
-    const id = el.dataset.id;
-    if (box.has(id)) return;
-    const r = el.getBoundingClientRect();
-    const wrap = (el.closest(".couple") || el.closest(".partner") || el).getBoundingClientRect();
-    box.set(id, { cx: (r.left + r.width / 2 - base.left) / z, top: (r.top - base.top) / z, bottom: (r.bottom - base.top) / z, wtop: (wrap.top - base.top) / z, wbottom: (wrap.bottom - base.top) / z });
-  });
-  const groups = new Map();
-  box.forEach((c, id) => {
-    const p = byId(id);
-    if (!p) return;
-    const f = p.father_id && box.get(p.father_id), m = p.mother_id && box.get(p.mother_id);
-    if (!f && !m) return;
-    const key = `${f ? p.father_id : ""}|${m ? p.mother_id : ""}`;
-    const g = groups.get(key) || { f, m, kids: [] };
-    g.kids.push(c);
-    groups.set(key, g);
-  });
-  const NS = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("class", "lines");
-  svg.setAttribute("width", tree.scrollWidth);
-  svg.setAttribute("height", tree.scrollHeight);
-  const path = (d, col) => { const e = document.createElementNS(NS, "path"); e.setAttribute("d", d); e.style.stroke = col; svg.append(e); };
-  const dot = (x, y, col) => { const e = document.createElementNS(NS, "circle"); e.setAttribute("cx", x); e.setAttribute("cy", y); e.setAttribute("r", 4.5); e.style.fill = col; svg.append(e); };
-  let gi = 0;
-  groups.forEach((g) => {
-    const above = [g.f, g.m].filter(Boolean).filter((x) => x.bottom < Math.min(...g.kids.map((k) => k.top)));
-    if (!above.length) return;
-    const ax = above.reduce((a, x) => a + x.cx, 0) / above.length;
-    const ay = Math.max(...above.map((x) => x.wbottom));
-    const kidTop = Math.min(...g.kids.map((k) => k.wtop));
-    const bus = ay + Math.min(14, Math.max(6, (kidTop - ay) / 2));
-    const xs = [ax, ...g.kids.map((k) => k.cx)];
-    const col = LINE_COLORS[gi++ % LINE_COLORS.length]; // her ebeveyn-çocuk bağlantısı ayrı renkte
-    path(`M${ax} ${ay}V${bus}`, col);
-    if (Math.min(...xs) !== Math.max(...xs)) path(`M${Math.min(...xs)} ${bus}H${Math.max(...xs)}`, col);
-    g.kids.forEach((k) => path(`M${k.cx} ${bus}V${k.wtop}`, col));
-    dot(ax, ay, col); // başlangıç topu
-    g.kids.forEach((k) => dot(k.cx, k.wtop, col)); // bitiş topları
-  });
-  tree.append(svg);
+  tree.style.transform = prevT;
 }
 
 function genForm() {
@@ -508,87 +456,250 @@ function forestHtml() {
   return `<div class="forest">${parts.filter(Boolean).map((h) => `<ul>${h}</ul>`).join("")}</div>`;
 }
 
-const ancLabel = (lvl) => (lvl === 0 ? "Anne ve baba" : lvl === 1 ? "Dede ve nine" : lvl === 2 ? "Büyük dede ve nine" : `${lvl + 1}. kuşak üst atalar`);
-function ancestorRows(fid, up, sibs) {
-  const rows = [];
-  const placed = new Set([fid]);
-  const walk = (pid, lvl) => {
-    if (lvl >= up) return;
-    const q = byId(pid);
-    if (!q) return;
-    [byId(q.father_id), byId(q.mother_id)].forEach((par) => {
-      if (!par || placed.has(par.id)) return;
-      placed.add(par.id);
-      (rows[lvl] = rows[lvl] || []).push(par);
-      walk(par.id, lvl + 1);
-    });
+// ---------- "Benim soyum": konumlu soy ağacı ----------
+// Her kart hesaplanan yerine (x, satır) mutlak olarak yerleştirilir; çocuklar ebeveynlerinin hemen alt satırında,
+// ebeveyn çerçevesinin altında durur. Çizgiler SVG ile çizilir, her ebeveyn→çocuk bağlantısı ayrı renktedir.
+const LN = { CW: 124, AMP: 40, PAD: 8, GAP: 28, M: 24, LZ: 44 };
+const LINE_COLORS = ["#e6194b", "#3a7bd5", "#2e9e4f", "#f58231", "#8e44ad", "#00a3a3", "#c2185b", "#8d6e00", "#5d6bd8", "#d35400", "#1b8a5a", "#a0306f"];
+const rowGap = () => Math.min(168, Math.max(64, Number(S.prefs.rowgap) || 76));
+const upLabel = (d) => (d === 1 ? "Anne ve baba" : d === 2 ? "Dede ve nine" : d === 3 ? "Büyük dede ve nine" : `${d + 1}. kuşak üst atalar`);
+const downLabel = (k) => (k === 1 ? "Çocuklar" : k === 2 ? "Torunlar" : k === 3 ? "Torunların çocukları" : `${k + 1}. kuşak alt soy`);
+const unitW = (u) => u.ids.length * LN.CW + (u.ids.length - 1) * LN.AMP;
+const newNode = () => ({ w: 0, cards: [], frames: [], mores: [] });
+function shiftNode(n, dx) {
+  n.cards.forEach((c) => { c.x += dx; });
+  n.frames.forEach((f) => { f.x0 += dx; f.x1 += dx; });
+  n.mores.forEach((m) => { m.x += dx; });
+  ["unitCx", "cx"].forEach((k) => { if (n[k] != null) n[k] += dx; });
+}
+function absorb(into, n, dx) {
+  shiftNode(n, dx);
+  into.cards.push(...n.cards); into.frames.push(...n.frames); into.mores.push(...n.mores);
+}
+function placeUnit(node, u, x, lv) {
+  u.ids.forEach((id, i) => node.cards.push({ id, x: x + i * (LN.CW + LN.AMP) + LN.CW / 2, lv }));
+  if (u.ids.length > 1) node.frames.push({ ids: u.ids, x0: x - LN.PAD, x1: x + unitW(u) + LN.PAD, lv });
+}
+function mkUnit(p, withSp, ctx) {
+  const ids = [p.id];
+  if (withSp) spousesOf(p.id).forEach((sid) => { if (!ctx.placed.has(sid) && byId(sid)) { ctx.placed.add(sid); ids.push(sid); } });
+  if (ids.length === 2 && byId(ids[0]).gender !== "E" && byId(ids[1]).gender === "E") ids.reverse();
+  return { ids, main: p.id };
+}
+// Yukarı doğru: kişi + kardeşleri (aynı satır) ve üstlerinde ebeveyn çifti. anchor: R = baba tarafı (sağa yaslı), L = anne tarafı (sola yaslı), C = ortalı
+function buildSibship(pid, d, anchor, ctx) {
+  const p = byId(pid);
+  ctx.placed.add(pid);
+  const sibs = ctx.sibs ? siblingsOf(p).filter((x) => !ctx.placed.has(x.id)).sort(kidCmp) : [];
+  sibs.forEach((x) => ctx.placed.add(x.id));
+  const mainU = mkUnit(p, d === 0, ctx);
+  const sibU = sibs.map((x) => mkUnit(x, true, ctx));
+  let units;
+  if (anchor === "R") units = [...sibU, mainU];
+  else if (anchor === "L") units = [mainU, ...sibU];
+  else units = [...sibU, mainU].sort((x, y) => kidCmp(byId(x.main), byId(y.main)));
+  // üst satır: her kişinin (ve eşlerinin) ebeveyn çifti, kartların sırasına göre yan yana "yuva"lar halinde
+  const slots = [];
+  const slotFor = (person) => {
+    const f = byId(person.father_id), m = byId(person.mother_id);
+    const fo = f && !ctx.placed.has(f.id), mo = m && !ctx.placed.has(m.id);
+    if (!fo && !mo) return;
+    if (d >= ctx.up) { ctx.trunc = true; return; }
+    if (fo && mo) {
+      const fb = buildSibship(f.id, d + 1, "R", ctx), mb = buildSibship(m.id, d + 1, "L", ctx);
+      const n = newNode();
+      n.w = fb.w + LN.AMP + mb.w;
+      absorb(n, fb, 0);
+      absorb(n, mb, fb.w + LN.AMP);
+      const fc = n.cards.find((c) => c.id === f.id), mc = n.cards.find((c) => c.id === m.id);
+      n.frames.push({ ids: [f.id, m.id], x0: fc.x - LN.CW / 2 - LN.PAD, x1: mc.x + LN.CW / 2 + LN.PAD, lv: -(d + 1) });
+      slots.push(n);
+    } else slots.push(buildSibship((fo ? f : m).id, d + 1, "C", ctx));
   };
-  walk(fid, 0);
-  const last = rows[up - 1];
-  const truncated = !!(last && rows.length === up && last.some((a) => a.father_id || a.mother_id));
-  const extra = new Set(); // kardeş / amca / hala olarak eklenenler
-  if (sibs) {
-    rows.forEach((row, i) => {
-      rows[i] = row.flatMap((a) => [a, ...siblingsOf(a).filter((x) => !placed.has(x.id) && placed.add(x.id) && extra.add(x.id))]);
-    });
-  }
-  return { rows, truncated, extra };
-}
-// Bir satırdaki kişileri evli çiftler halinde grupla (eşler yan yana, aralarında ♥). Çiftler kan bağı sırasını korur.
-function coupleUnits(list, extra, used) {
-  const inList = new Set(list.map((x) => x.id));
-  const placed = new Set();
-  const units = [];
-  list.forEach((x) => {
-    if (placed.has(x.id)) return;
-    placed.add(x.id);
-    const u = [x];
-    spousesOf(x.id).forEach((sid) => {
-      const o = byId(sid);
-      if (!o || placed.has(sid)) return;
-      if (inList.has(sid) || (extra.has(x.id) && !used.has(sid))) { placed.add(sid); used.add(sid); u.push(o); }
-    });
-    if (u.length === 2 && u[0].gender !== "E" && u[1].gender === "E") u.reverse();
-    units.push(u);
+  units.forEach((u) => u.ids.forEach((id) => slotFor(byId(id))));
+  const rowW = units.reduce((s, u) => s + unitW(u), 0) + LN.GAP * (units.length - 1);
+  const upW = slots.reduce((s, n) => s + n.w, 0) + LN.GAP * Math.max(0, slots.length - 1);
+  const w = Math.max(rowW, upW);
+  const node = newNode();
+  node.w = w;
+  let x = anchor === "R" ? w - rowW : anchor === "L" ? 0 : (w - rowW) / 2;
+  units.forEach((u) => {
+    placeUnit(node, u, x, -d);
+    if (u === mainU) { node.unitCx = x + unitW(u) / 2; node.focusIds = u.ids; }
+    x += unitW(u) + LN.GAP;
   });
-  return units;
+  x = (w - upW) / 2;
+  slots.forEach((n) => { absorb(node, n, x); x += n.w + LN.GAP; });
+  return node;
 }
-const unitHtml = (u) => (u.length === 1 ? partner(u[0].id, false) : `<div class="couple">${u.map((x, i) => (i ? `<span class="amp" title="Eşler" aria-label="Eş">♥</span>` : "") + partner(x.id, false)).join("")}</div>`);
-const ghostCards = (n) => Array.from({ length: Math.max(0, n) }, () => `<span class="pcard ghost" aria-hidden="true"></span>`).join("");
-
-function lineageHtml() {
+// Aşağı doğru: bir birimin (kişi + eşi) çocukları, her çocuk kendi altsoyunun üstünde
+function buildKids(unit, k, ctx) {
+  const km = new Map();
+  childrenOf(unit.ids).forEach((c) => km.set(c.id, c));
+  const kids = [...km.values()].filter((c) => !ctx.placed.has(c.id)).sort(kidCmp);
+  if (!kids.length) return null;
+  if (k >= ctx.down) return { more: kids.length };
+  kids.forEach((c) => ctx.placed.add(c.id));
+  const subs = kids.map((c) => buildKid(mkUnit(c, true, ctx), k + 1, ctx));
+  const node = newNode();
+  let x = 0;
+  const ucx = [];
+  subs.forEach((s) => { absorb(node, s, x); ucx.push(s.unitCx); x += s.w + LN.GAP; });
+  node.w = x - LN.GAP;
+  node.cx = (ucx[0] + ucx[ucx.length - 1]) / 2;
+  return node;
+}
+function buildKid(u, k, ctx) {
+  const below = buildKids(u, k, ctx);
+  const framed = u.ids.length > 1;
+  const uw = unitW(u) + (framed ? 2 * LN.PAD : 0);
+  const node = newNode();
+  if (below && !below.more) {
+    let uc = below.cx;
+    const shift = uc - uw / 2 < 0 ? uw / 2 - uc : 0;
+    absorb(node, below, shift);
+    uc += shift;
+    node.w = Math.max(below.w + shift, uc + uw / 2);
+    placeUnit(node, u, uc - unitW(u) / 2, k);
+    node.unitCx = uc;
+  } else {
+    node.w = uw;
+    placeUnit(node, u, framed ? LN.PAD : 0, k);
+    node.unitCx = uw / 2;
+    if (below && below.more) node.mores.push({ id: u.main, count: below.more, x: node.unitCx, lv: k });
+  }
+  return node;
+}
+function lineageModel() {
   const fid = S.focus;
-  const { rows, truncated, extra } = ancestorRows(fid, S.prefs.up, S.prefs.sibs);
-  const n = rows.length;
-  S.depthMax = n + S.prefs.down;
-  const used = new Set([fid, ...spousesOf(fid)]);
-  rows.forEach((r) => r.forEach((x) => used.add(x.id)));
-  let h = truncated ? `<div class="ancmore"><button type="button" class="btn small" data-action="moreUp">↑ Daha üst nesiller var</button></div>` : "";
-  rows.slice().reverse().forEach((row, i) => {
-    const units = coupleUnits(row, extra, used);
-    h += `<div class="ancwrap"><div class="anclabel">${ancLabel(n - 1 - i)}</div><div class="ancrow" data-gen="${i}">${units.map(unitHtml).join("")}</div></div>`;
-  });
-  // Kardeşler, seçilen kişiyle aynı satırda: büyükler solda, küçükler sağda (kişi hep ortada kalsın diye karşı tarafa görünmez boşluk eklenir)
-  let side = null;
-  if (S.prefs.sibs) {
-    const sibs = siblingsOf(byId(fid));
-    if (sibs.length) {
-      const order = [...sibs, byId(fid)].sort(kidCmp);
-      const at = order.findIndex((x) => x.id === fid);
-      const sibIds = new Set(sibs.map((x) => x.id));
-      sibs.forEach((x) => used.add(x.id));
-      const mk = (list) => coupleUnits(list, sibIds, used);
-      const L = mk(order.slice(0, at)), R = mk(order.slice(at + 1));
-      const cnt = (us) => us.reduce((a, u) => a + u.length, 0);
-      side = {
-        left: `<div class="sibgrp">${ghostCards(cnt(R) - cnt(L))}${L.map(unitHtml).join("")}</div>`,
-        right: `<div class="sibgrp">${R.map(unitHtml).join("")}${ghostCards(cnt(L) - cnt(R))}</div>`,
-      };
-    }
-  }
-  S.maxGen = n;
-  return h + `<ul>${nodeHtml(fid, new Set(), true, n, side)}</ul>`;
+  const ctx = { placed: new Set(), up: Number(S.prefs.up), down: Number(S.prefs.down), sibs: !!S.prefs.sibs, trunc: false };
+  const sib = buildSibship(fid, 0, "C", ctx);
+  const root = newNode();
+  absorb(root, sib, 0);
+  const below = buildKids({ ids: sib.focusIds, main: fid }, 0, ctx);
+  if (below && !below.more) absorb(root, below, sib.unitCx - below.cx);
+  else if (below && below.more) root.mores.push({ id: fid, count: below.more, x: sib.unitCx, lv: 0 });
+  let min = Infinity, max = -Infinity;
+  root.cards.forEach((c) => { min = Math.min(min, c.x - LN.CW / 2); max = Math.max(max, c.x + LN.CW / 2); });
+  root.frames.forEach((f) => { min = Math.min(min, f.x0); max = Math.max(max, f.x1); });
+  shiftNode(root, LN.M - min);
+  root.W = max - min + 2 * LN.M;
+  root.trunc = ctx.trunc;
+  root.focus = fid;
+  return root;
 }
+function lineageHtml() {
+  const m = lineageModel();
+  S.lin = m;
+  const shown = new Set(m.cards.map((c) => c.id));
+  S.maxGen = Math.max(0, new Set(m.cards.map((c) => c.lv)).size - 1);
+  return `<div class="lin-in">${m.cards.map((c) => {
+    const p = byId(c.id);
+    const chip = (p.father_id || p.mother_id) && !shown.has(p.father_id) && !shown.has(p.mother_id);
+    return `<div class="lcard${c.id === m.focus ? " lfocus" : ""}" data-cid="${c.id}" style="left:${c.x - LN.CW / 2}px">${partner(c.id, !!chip)}</div>`;
+  }).join("")}</div>`;
+}
+// Kartların gerçek yükseklikleri ölçülür; satırlar, çerçeveler, nesil bantları, etiketler ve renkli çizgiler yerleştirilir.
+function placeLineage() {
+  const tree = document.querySelector(".tree.lin");
+  const m = S.lin;
+  if (!tree || !m) return;
+  tree.querySelectorAll(".gband,.cframe,.lamp,.lrowlab,.lmore,.lines").forEach((x) => x.remove());
+  const inner = tree.querySelector(".lin-in");
+  const NS = "http://www.w3.org/2000/svg";
+  const rg = rowGap();
+  const els = new Map();
+  tree.querySelectorAll(".lcard").forEach((e) => els.set(e.dataset.cid, e));
+  const lvs = [...new Set(m.cards.map((c) => c.lv))].sort((p, q) => p - q);
+  const rowTop = new Map(), rowH = new Map();
+  let y = LN.LZ + 6;
+  lvs.forEach((lv) => {
+    const es = m.cards.filter((c) => c.lv === lv).map((c) => els.get(c.id));
+    const h = Math.max(...es.map((e) => e.offsetHeight));
+    rowTop.set(lv, y); rowH.set(lv, h);
+    es.forEach((e) => { e.style.top = y + "px"; });
+    y += h + rg;
+  });
+  let H = y - rg + LN.M + 16;
+  const cardH = (id) => els.get(id).querySelector(".pcard").offsetHeight;
+  const add = (cls, css, html = "", host = inner) => { const e = document.createElement("div"); e.className = cls; e.style.cssText = css; e.innerHTML = html; host.append(e); return e; };
+  // nesil bantları + satır etiketleri (nesil yazısının altında, solda)
+  lvs.forEach((lv, i) => {
+    const top = i === 0 ? 0 : rowTop.get(lv) - LN.LZ;
+    const next = i < lvs.length - 1 ? rowTop.get(lvs[i + 1]) - LN.LZ : H;
+    if (S.gen.on) add("gband", `top:${top}px;height:${Math.max(0, next - top)}px;background:${genColor(i)}`, `<span>${i + 1}. nesil</span>`, tree);
+    const label = lv < 0 ? upLabel(-lv) : lv === 0 ? `Kendisi${S.prefs.sibs ? " ve kardeşleri" : ""}` : downLabel(lv);
+    add("lrowlab", `top:${rowTop.get(lv) - 26}px`, esc(label));
+  });
+  // evli çiftlerin çerçevesi ve ♥
+  const cx = new Map(m.cards.map((c) => [c.id, c]));
+  m.frames.forEach((f) => {
+    const h = Math.max(...f.ids.map(cardH));
+    add("cframe", `left:${f.x0}px;top:${rowTop.get(f.lv) - LN.PAD}px;width:${f.x1 - f.x0}px;height:${h + 2 * LN.PAD}px`);
+    f.ids.slice(1).forEach((id) => add("lamp", `left:${cx.get(id).x - LN.CW / 2 - LN.AMP}px;top:${rowTop.get(f.lv) + 23}px;width:${LN.AMP}px`));
+  });
+  const frameOf = new Map();
+  m.frames.forEach((f) => f.ids.forEach((id) => frameOf.set(id, f)));
+  const bot = (id) => rowTop.get(cx.get(id).lv) + cardH(id) + (frameOf.has(id) ? LN.PAD : 0);
+  m.mores.forEach((o) => {
+    const b = add("lmore", `left:${o.x - 70}px;top:${rowTop.get(o.lv) + rowH.get(o.lv) + 10}px`, `<button type="button" class="btn small" data-action="focusOn" data-id="${o.id}">⤵ ${o.count} alt kişi…</button>`);
+    H = Math.max(H, parseFloat(b.style.top) + 44);
+  });
+  // ebeveyn → çocuk çizgileri
+  const groups = new Map();
+  m.cards.forEach((c) => {
+    const p = byId(c.id);
+    const pars = [p.father_id, p.mother_id].map((q) => q && cx.get(q)).filter((q) => q && q.lv < c.lv);
+    if (!pars.length) return;
+    const key = pars.map((q) => q.id).join("|");
+    const g = groups.get(key) || { pars, kids: [] };
+    g.kids.push(c);
+    groups.set(key, g);
+  });
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("class", "lines");
+  svg.setAttribute("width", m.W);
+  svg.setAttribute("height", H);
+  let gi = 0;
+  groups.forEach((g) => {
+    const col = LINE_COLORS[gi % LINE_COLORS.length];
+    const same = g.pars.length === 2 && frameOf.get(g.pars[0].id) && frameOf.get(g.pars[0].id) === frameOf.get(g.pars[1].id);
+    const fr = same ? frameOf.get(g.pars[0].id) : null;
+    const ax = fr ? (fr.x0 + fr.x1) / 2 : g.pars.reduce((s, q) => s + q.x, 0) / g.pars.length;
+    const ay = Math.max(...g.pars.map((q) => bot(q.id)));
+    const kidTop = rowTop.get(g.kids[0].lv);
+    const bus = Math.min(ay + 14 + (gi % 3) * 8, kidTop - 14);
+    const xs = [ax, ...g.kids.map((k) => k.x)];
+    const grp = document.createElementNS(NS, "g");
+    grp.dataset.p = g.pars.map((q) => q.id).join(",");
+    grp.dataset.k = g.kids.map((k) => k.id).join(",");
+    grp.style.color = col;
+    const path = (d) => { const e = document.createElementNS(NS, "path"); e.setAttribute("d", d); grp.append(e); };
+    const dot = (px, py) => { const e = document.createElementNS(NS, "circle"); e.setAttribute("cx", px); e.setAttribute("cy", py); e.setAttribute("r", 4.5); grp.append(e); };
+    path(`M${ax} ${ay}V${bus}`);
+    if (Math.min(...xs) !== Math.max(...xs)) path(`M${Math.min(...xs)} ${bus}H${Math.max(...xs)}`);
+    g.kids.forEach((k) => { path(`M${k.x} ${bus}V${kidTop - 1}`); dot(k.x, kidTop - 1); });
+    dot(ax, ay);
+    svg.append(grp);
+    gi++;
+  });
+  inner.style.width = m.W + "px";
+  inner.style.height = H + "px";
+  tree.style.height = H + "px";
+  svg.setAttribute("height", H);
+  inner.append(svg);
+}
+// Kişinin üzerine gelince ona bağlı çizgiler belirginleşir, diğerleri soluklaşır
+let hlId = null;
+document.addEventListener("mouseover", (e) => {
+  const svg = document.querySelector(".tree.lin .lines");
+  if (!svg) return;
+  const id = e.target.closest?.(".tree.lin .pcard[data-id]")?.dataset.id || null;
+  if (id === hlId) return;
+  hlId = id;
+  svg.classList.toggle("hl", !!id);
+  svg.querySelectorAll("g").forEach((g) => g.classList.toggle("on", !!id && (g.dataset.p.split(",").includes(id) || g.dataset.k.split(",").includes(id))));
+});
 
 function renderTree(v) {
   if (!S.people.length) {
@@ -604,8 +715,9 @@ function renderTree(v) {
   const all = S.rootId === "all";
   const root = all ? null : byId(S.rootId);
   const up = !lin && root && (root.father_id || root.mother_id);
-  const personOpts = (sel) => sortPeople(S.people, S.prefs.dropSort).map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(fullName(p))} ${esc(years(p))}</option>`).join("");
+  const personOpts = (sel) => sortPeople(S.people, S.prefs.dropSort).map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(displayName(p))} ${esc(years(p))}</option>`).join("");
   const optN = (cur) => [1, 2, 3, 4, 5, 6, 99].map((n) => `<option value="${n}" ${Number(cur) === n ? "selected" : ""}>${n === 99 ? "Hepsi" : n}</option>`).join("");
+  const linHtml = lin ? lineageHtml() : "";
   const mid = lin
     ? `<select id="rootSel" aria-label="Soyu gösterilecek kişi">${personOpts(S.focus)}</select>
       <label class="inl">Yukarı <select data-lin="up">${optN(S.prefs.up)}</select> nesil</label>
@@ -627,13 +739,14 @@ function renderTree(v) {
       <span id="zoomPct" class="muted"></span>
       <button type="button" class="btn small" data-action="zoomIn" aria-label="Yakınlaştır">🔍+</button>
       <button type="button" class="btn small" data-action="zoomFit">Tümünü sığdır</button>
+      ${lin && S.lin?.trunc ? `<button type="button" class="btn small" data-action="moreUp">↑ Daha üst nesiller var</button>` : ""}
       ${lin ? `<span class="muted">Satır aralığı</span><button type="button" class="btn small" data-action="gapLess" aria-label="Satır aralığını azalt">↕−</button><button type="button" class="btn small" data-action="gapMore" aria-label="Satır aralığını artır">↕+</button>` : ""}
       <button type="button" class="btn small" data-action="zoomReset">%100</button>
     </div>
-    <div class="tree-wrap"><div class="tree" style="--rg:${Number(S.prefs.rowgap) || 56}px">${lin ? lineageHtml() : all ? forestHtml() : `<ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul>`}</div></div>
+    <div class="tree-wrap"><div class="tree-sizer"><div class="tree${lin ? " lin" : ""}">${lin ? linHtml : all ? forestHtml() : `<ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul>`}</div></div></div>
     </div>
     <p class="muted hint">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın (pencerede "🧬 Soyunu göster" ile o kişinin atalarını ve altsoyunu görürsünüz). Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
-  applyBands();
+  if (lin) placeLineage(); else applyBands();
   if (S.fitPending) { S.fitPending = false; fitZoom(); }
   applyZoom();
 }
@@ -641,12 +754,27 @@ function renderTree(v) {
 // ---------- yakınlaştırma ----------
 const ZOOM_MIN = 0.15, ZOOM_MAX = 2;
 function applyZoom() {
+  const wrap = document.querySelector(".tree-wrap");
+  const sizer = document.querySelector(".tree-sizer");
   const tree = document.querySelector(".tree");
-  if (!tree) return;
-  tree.style.zoom = S.zoom;
+  if (!wrap || !sizer || !tree) return;
+  const z = S.zoom;
+  if (tree.classList.contains("lin") && S.lin) {
+    const tw = Math.max(S.lin.W, wrap.clientWidth / z);
+    tree.style.width = tw + "px";
+    const inn = tree.querySelector(".lin-in");
+    if (inn) inn.style.left = (tw - S.lin.W) / 2 + "px";
+  }
+  else tree.style.minWidth = wrap.clientWidth / z + "px"; // bantlar ve ağaç alanın tamamını kaplasın
+  // CSS "zoom" yerine transform: iPhone'da yazılar kartlardan bağımsız büyüyüp iç içe geçmesin
+  tree.style.transform = `scale(${z})`;
+  const w = tree.offsetWidth * z, h = tree.offsetHeight * z;
+  const sw = Math.max(w, wrap.clientWidth);
+  sizer.style.width = sw + "px";
+  sizer.style.height = h + "px";
+  tree.style.left = Math.max(0, (sw - w) / 2) + "px";
   const pct = document.getElementById("zoomPct");
-  if (pct) pct.textContent = Math.round(S.zoom * 100) + "%";
-  drawLines(); // yakınlaştırmadan sonra konumlar değişebilir: çizgileri yeniden çiz
+  if (pct) pct.textContent = Math.round(z * 100) + "%";
 }
 function setZoom(z) {
   S.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
@@ -656,11 +784,9 @@ function fitZoom() {
   const wrap = document.querySelector(".tree-wrap");
   const tree = document.querySelector(".tree");
   if (!wrap || !tree) return;
-  tree.style.zoom = 1;
+  tree.style.transform = "none";
   tree.style.minWidth = "0";
-  const natural = tree.offsetWidth;
-  tree.style.minWidth = "";
-  const naturalH = tree.offsetHeight;
+  const natural = tree.classList.contains("lin") && S.lin ? S.lin.W : tree.offsetWidth, naturalH = tree.offsetHeight;
   setZoom(Math.min(1, (wrap.clientWidth - 4) / natural, (wrap.clientHeight - 4) / naturalH));
   wrap.scrollLeft = 0;
   wrap.scrollTop = 0;
@@ -672,8 +798,9 @@ const cityKey = (c) => String(c || "").trim().toLocaleLowerCase("tr");
 function filteredPeople() {
   const q = S.q.trim().toLocaleLowerCase("tr");
   return S.people.filter((p) => {
-    if (q && !`${fullName(p)} ${p.city || ""}`.toLocaleLowerCase("tr").includes(q)) return false;
+    if (q && !`${fullName(p)} ${p.maiden_name || ""} ${p.city || ""}`.toLocaleLowerCase("tr").includes(q)) return false;
     if (S.fCity && cityKey(p.city) !== S.fCity) return false;
+    if (S.fSur && surOf(p) !== S.fSur && String(p.maiden_name || "").trim() !== S.fSur) return false;
     if (S.fGender === "?" ? !!p.gender : S.fGender && p.gender !== S.fGender) return false;
     if (S.fStatus === "alive" && isDead(p)) return false;
     if (S.fStatus === "dead" && !isDead(p)) return false;
@@ -722,6 +849,7 @@ function sortPeople(list, key = S.sort) {
   const cmpBirth = (dir) => (a, b) => (!bd(a) - !bd(b)) || dir * bd(a).localeCompare(bd(b)) || fullName(a).localeCompare(fullName(b), "tr");
   const fns = {
     alpha: (a, b) => fullName(a).localeCompare(fullName(b), "tr"),
+    surname: (a, b) => (!surOf(a) - !surOf(b)) || surOf(a).localeCompare(surOf(b), "tr") || String(a.first_name || "").localeCompare(String(b.first_name || ""), "tr"),
     age_old: cmpBirth(1),
     age_young: cmpBirth(-1),
     created_old: (a, b) => String(a.created_at).localeCompare(String(b.created_at)),
@@ -732,9 +860,14 @@ function sortPeople(list, key = S.sort) {
 }
 function peopleListHtml(list) {
   if (!list.length) return `<p class="muted center">Sonuç yok.</p>`;
-  return sortPeople(list)
-    .map((p) => { const bits = previewBits(p); return `<button type="button" data-action="open" data-id="${p.id}"><span>${isPending(p) ? "⏳ " : ""}${S.photoSet.has(p.id) ? "📷 " : ""}${p.hidden_for ? "🔒 " : ""}${esc(fullName(p))}${bits.length ? `<small class="city">${esc(bits.join(" · "))}</small>` : ""}</span><span class="muted">${esc(years(p))}</span></button>`; })
-    .join("");
+  const row = (p) => { const bits = previewBits(p); return `<button type="button" data-action="open" data-id="${p.id}"><span>${isPending(p) ? "⏳ " : ""}${S.photoSet.has(p.id) ? "📷 " : ""}${p.hidden_for ? "🔒 " : ""}${esc(displayName(p))}${bits.length ? `<small class="city">${esc(bits.join(" · "))}</small>` : ""}</span><span class="muted">${esc(years(p))}</span></button>`; };
+  const sorted = sortPeople(list);
+  if (S.sort !== "surname") return sorted.map(row).join("");
+  // soyadına göre gruplu liste
+  let cur = null, n = 0;
+  const groups = [];
+  sorted.forEach((p) => { const s = surOf(p) || "Soyadı yok"; if (s !== cur) { cur = s; groups.push({ s, items: [] }); } groups[groups.length - 1].items.push(p); n++; });
+  return groups.map((g) => `<div class="sgroup">${esc(g.s)} <span class="muted">(${g.items.length})</span></div>${g.items.map(row).join("")}`).join("");
 }
 
 function refreshPeople() {
@@ -751,10 +884,11 @@ function renderPeople(v) {
   const cityOpts = [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1], "tr"))
     .map(([k, n]) => `<option value="${esc(k)}" ${S.fCity === k ? "selected" : ""}>${esc(n)}</option>`).join("");
   const sel = (val, cur) => (val === cur ? "selected" : "");
-  v.innerHTML = `<div class="toolbar"><input id="q" type="search" placeholder="Ad veya şehir ara…" value="${esc(S.q)}">
+  v.innerHTML = `<div class="toolbar"><input id="q" type="search" placeholder="Ad, soyad veya şehir ara…" value="${esc(S.q)}">
       ${canAdd() ? `<button type="button" class="btn primary" data-action="addPerson">+ Kişi</button>` : ""}</div>
     <div class="filters">
       <select id="fCity" aria-label="Şehir"><option value="">Tüm şehirler</option>${cityOpts}</select>
+      <select id="fSur" aria-label="Soyadı"><option value="">Tüm soyadları</option>${surnames().map((s) => `<option value="${esc(s)}" ${S.fSur === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
       <select id="fGender" aria-label="Cinsiyet"><option value="">Erkek + Kadın</option>
         <option value="E" ${sel("E", S.fGender)}>Erkek</option><option value="K" ${sel("K", S.fGender)}>Kadın</option><option value="?" ${sel("?", S.fGender)}>Cinsiyet yok</option></select>
       <select id="fStatus" aria-label="Durum"><option value="">Hayatta + Vefat</option>
@@ -1116,7 +1250,7 @@ async function finishChange(res, personId) {
   }
 }
 
-const FIELD_LABELS = { first_name: "Ad", last_name: "Soyad", gender: "Cinsiyet", birth_place: "Doğum yeri", birth_date: "Doğum tarihi", death_date: "Ölüm tarihi", city: "Şehir", is_deceased: "Vefat", burial_place: "Defin yeri", blood_type: "Kan grubu", notes: "Notlar", father_id: "Baba", mother_id: "Anne" };
+const FIELD_LABELS = { first_name: "Ad", last_name: "Soyad", maiden_name: "Evlenmeden önceki soyadı", gender: "Cinsiyet", birth_place: "Doğum yeri", birth_date: "Doğum tarihi", death_date: "Ölüm tarihi", city: "Şehir", is_deceased: "Vefat", burial_place: "Defin yeri", blood_type: "Kan grubu", notes: "Notlar", father_id: "Baba", mother_id: "Anne" };
 function showVal(k, v) {
   if (v === null || v === undefined || v === "") return "boş";
   if (k === "father_id" || k === "mother_id") return fullName(byId(v)) || "?";
@@ -1137,6 +1271,8 @@ function personForm(p, preset = {}) {
     <form data-form="person" data-id="${p?.id || ""}" data-spouse-of="${preset.spouseOf || ""}" data-father-of="${preset.fatherOf || ""}" data-mother-of="${preset.motherOf || ""}">
       <div class="row2"><label>Ad<input name="first_name" required value="${esc(v.first_name)}"></label>
         <label>Soyad<input name="last_name" value="${esc(v.last_name)}"></label></div>
+      <label>Evlenmeden önceki soyadı <span class="muted small">(kızlık soyadı)</span><input name="maiden_name" list="surList" placeholder="Örn. KARAMAN" value="${esc(v.maiden_name)}"></label>
+      <datalist id="surList">${surnames().map((s) => `<option value="${esc(s)}">`).join("")}</datalist>
       <div class="row2"><label>Cinsiyet<select name="gender"><option value="">—</option>
           <option value="E" ${v.gender === "E" ? "selected" : ""}>Erkek</option><option value="K" ${v.gender === "K" ? "selected" : ""}>Kadın</option></select></label>
         <label>Doğum yeri<input name="birth_place" value="${esc(v.birth_place)}"></label></div>
@@ -1159,7 +1295,7 @@ async function submitPerson(f) {
   const val = (n) => (e[n].value.trim() === "" ? null : e[n].value.trim());
   const dead = e.is_deceased.checked || !!val("death_date");
   const obj = {
-    first_name: e.first_name.value.trim(), last_name: val("last_name"), gender: val("gender"),
+    first_name: e.first_name.value.trim(), last_name: val("last_name"), maiden_name: val("maiden_name"), gender: val("gender"),
     birth_place: val("birth_place"), birth_date: val("birth_date"), death_date: val("death_date"),
     father_id: val("father_id"), mother_id: val("mother_id"), notes: val("notes"),
     city: val("city"), is_deceased: dead, burial_place: dead ? val("burial_place") : null, blood_type: val("blood_type"),
@@ -1597,8 +1733,8 @@ function peopleCsv(d) {
   const nm = (id) => { const x = by.get(id); return x ? [x.first_name, x.last_name].filter(Boolean).join(" ") : ""; };
   const sp = new Map();
   d.spouses.forEach((s) => { (sp.get(s.person_a) || sp.set(s.person_a, []).get(s.person_a)).push(nm(s.person_b)); (sp.get(s.person_b) || sp.set(s.person_b, []).get(s.person_b)).push(nm(s.person_a)); });
-  const head = ["Ad", "Soyad", "Cinsiyet", "Doğum tarihi", "Ölüm tarihi", "Doğum yeri", "Şehir", "Kan grubu", "Vefat", "Defin yeri", "Baba", "Anne", "Eş(ler)", "Notlar", "Durum"];
-  const rows = d.people.map((x) => [x.first_name, x.last_name, x.gender === "E" ? "Erkek" : x.gender === "K" ? "Kadın" : "", x.birth_date, x.death_date, x.birth_place, x.city, x.blood_type,
+  const head = ["Ad", "Soyad", "Evlenmeden önceki soyad", "Cinsiyet", "Doğum tarihi", "Ölüm tarihi", "Doğum yeri", "Şehir", "Kan grubu", "Vefat", "Defin yeri", "Baba", "Anne", "Eş(ler)", "Notlar", "Durum"];
+  const rows = d.people.map((x) => [x.first_name, x.last_name, x.maiden_name, x.gender === "E" ? "Erkek" : x.gender === "K" ? "Kadın" : "", x.birth_date, x.death_date, x.birth_place, x.city, x.blood_type,
     x.is_deceased || x.death_date ? "evet" : "", x.burial_place, nm(x.father_id), nm(x.mother_id), (sp.get(x.id) || []).join(" & "), x.notes, x.approval === "pending" ? "onay bekliyor" : "yayında"]);
   return "﻿" + [head, ...rows].map((r) => r.map(csvCell).join(";")).join("\r\n");
 }
@@ -1831,8 +1967,8 @@ const actions = {
     const b = document.querySelector('[data-action="toggleFull"]');
     if (b) b.textContent = S.treeFull ? "✕ Küçült" : "⛶ Tam ekran";
   },
-  gapMore: () => { S.prefs.rowgap = Math.min(160, (Number(S.prefs.rowgap) || 56) + 12); savePrefs(); renderView(); },
-  gapLess: () => { S.prefs.rowgap = Math.max(48, (Number(S.prefs.rowgap) || 56) - 12); savePrefs(); renderView(); },
+  gapMore: () => { S.prefs.rowgap = Math.min(168, rowGap() + 12); savePrefs(); renderView(); },
+  gapLess: () => { S.prefs.rowgap = Math.max(64, rowGap() - 12); savePrefs(); renderView(); },
   zoomIn: () => setZoom(S.zoom * 1.2),
   zoomOut: () => setZoom(S.zoom / 1.2),
   zoomReset: () => setZoom(1),
@@ -1840,7 +1976,7 @@ const actions = {
   genForm,
   genReset: () => { S.gen.colors = []; saveGen(); applyBands(); genForm(); },
   pickCity: (k) => { S.fCity = S.fCity === k ? "" : k; renderView(); },
-  clearFilters: () => { S.q = ""; S.fCity = ""; S.fGender = ""; S.fStatus = ""; S.fBlood = ""; renderView(); },
+  clearFilters: () => { S.q = ""; S.fCity = ""; S.fSur = ""; S.fGender = ""; S.fStatus = ""; S.fBlood = ""; renderView(); },
   addSibling,
   addParent: (id, el) => addParent(id, el.dataset.role),
   addNote: (id) => noteForm(id),
@@ -1957,6 +2093,7 @@ document.addEventListener("change", (e) => {
   }
   else if (t.dataset?.lin) { S.prefs[t.dataset.lin] = t.type === "checkbox" ? t.checked : Number(t.value); savePrefs(); S.fitPending = true; renderView(); }
   else if (t.id === "fCity") { S.fCity = t.value; refreshPeople(); }
+  else if (t.id === "fSur") { S.fSur = t.value; refreshPeople(); }
   else if (t.id === "fGender") { S.fGender = t.value; refreshPeople(); }
   else if (t.id === "fStatus") { S.fStatus = t.value; refreshPeople(); }
   else if (t.id === "fBlood") { S.fBlood = t.value; refreshPeople(); }
