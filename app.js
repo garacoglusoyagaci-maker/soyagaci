@@ -740,12 +740,12 @@ function renderTree(v) {
       <button type="button" class="btn small" data-action="zoomIn" aria-label="Yakınlaştır">🔍+</button>
       <button type="button" class="btn small" data-action="zoomFit">Tümünü sığdır</button>
       ${lin && S.lin?.trunc ? `<button type="button" class="btn small" data-action="moreUp">↑ Daha üst nesiller var</button>` : ""}
-      ${lin ? `<span class="muted">Satır aralığı</span><button type="button" class="btn small" data-action="gapLess" aria-label="Satır aralığını azalt">↕−</button><button type="button" class="btn small" data-action="gapMore" aria-label="Satır aralığını artır">↕+</button>` : ""}
+      ${lin ? `<button type="button" class="btn small" data-action="relForm">✏️ Akrabalık adları</button><span class="muted">Satır aralığı</span><button type="button" class="btn small" data-action="gapLess" aria-label="Satır aralığını azalt">↕−</button><button type="button" class="btn small" data-action="gapMore" aria-label="Satır aralığını artır">↕+</button>` : ""}
       <button type="button" class="btn small" data-action="zoomReset">%100</button>
     </div>
     <div class="tree-wrap"><div class="tree-sizer"><div class="tree${lin ? " lin" : ""}">${lin ? linHtml : all ? forestHtml() : `<ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul>`}</div></div></div>
     </div>
-    <p class="muted hint">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın (pencerede "🧬 Soyunu göster" ile o kişinin atalarını ve altsoyunu görürsünüz). Küçültmek için 🔍− ya da "Tümünü sığdır"ı kullanın; Ctrl + fare tekerleği de yakınlaştırır, sürükleyerek kaydırabilirsiniz.</p>`;
+    <p class="muted hint">Bir kişiye dokunarak ayrıntı ve fotoğraflarını açın (pencerede "🧬 Soyunu göster" ile o kişinin atalarını ve altsoyunu görürsünüz). Fare tekerleği tabloyu yakınlaştırır/uzaklaştırır (Shift + tekerlek yatay kaydırır); 🔍− ya da "Tümünü sığdır" da kullanılabilir, sürükleyerek kaydırabilirsiniz.</p>`;
   if (lin) placeLineage(); else applyBands();
   if (S.fitPending) { S.fitPending = false; fitZoom(); }
   applyZoom();
@@ -1102,6 +1102,32 @@ Telefonda uygulama gibi kullanmak için: Android Chrome'da ⋮ menü > "Uygulama
     </div>`);
 }
 
+function quickInvite(pid) {
+  const p = byId(pid);
+  if (!p) return;
+  if (inviteOf(pid)) return inviteMsg(pid);
+  const l = linkedOf(pid);
+  if (l) { toast(`${fullName(p)} zaten kayıtlı (${l.email}).`); return; }
+  showModal(`<h2>Davet gönder</h2><p class="muted">${esc(fullName(p))} için e-posta adresini yazın; kaydedince davet metni hazırlanır.</p>
+    <input type="email" id="qiEmail" inputmode="email" autocomplete="off" placeholder="E-posta adresi">
+    <select id="qiPerm"><option value="0">Kendi kaydı + alt/üst soyu (onaylı)</option><option value="1">Tam yetki</option></select>
+    <div class="actions"><button type="button" class="btn" data-action="open" data-id="${pid}">Vazgeç</button><button type="button" class="btn primary" data-action="quickInviteSave" data-id="${pid}">Kaydet ve davet metni oluştur</button></div>`);
+}
+async function quickInviteSave(pid, el) {
+  const email = document.getElementById("qiEmail").value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("Geçerli bir e-posta adresi yazın."); return; }
+  el.disabled = true;
+  try {
+    const { error } = await sb.from("invites").upsert({ person_id: pid, email, can_add: document.getElementById("qiPerm").value === "1" }, { onConflict: "person_id" });
+    if (error) throw error;
+    await loadAll();
+    inviteMsg(pid);
+  } catch (err) {
+    toast(err.code === "23505" ? "Bu e-posta başka bir kişiye atanmış." : "Hata: " + (err.message || err));
+    el.disabled = false;
+  }
+}
+
 async function copyInvite() {
   const t = document.getElementById("inviteText");
   if (!t) return;
@@ -1110,12 +1136,115 @@ async function copyInvite() {
   toast("Kopyalandı");
 }
 
+// ---------- akrabalık adları (Benim soyum görünümünde, üzerine gelince) ----------
+const REL_KEYS = ["Kendisi", "Eşi", "Babası", "Annesi", "Ebeveyni", "Dedesi", "Babaannesi", "Anneannesi", "Dede/ninesi", "Büyük dedesi", "Büyük ninesi", "Büyük dede/ninesi",
+  "Oğlu", "Kızı", "Çocuğu", "Torunu", "Torununun çocuğu", "Erkek kardeşi", "Kız kardeşi", "Kardeşi", "Amcası", "Halası", "Amca/halası", "Dayısı", "Teyzesi", "Dayı/teyzesi", "Yeğeni",
+  "Amcasının çocuğu", "Halasının çocuğu", "Dayısının çocuğu", "Teyzesinin çocuğu", "Dede/nine kardeşi", "Yengesi", "Eniştesi", "Gelini", "Damadı", "Kayınpederi", "Kayınvalidesi", "Eşinin akrabası"];
+const relName = (k) => (S.prefs.relNames && S.prefs.relNames[k]) || k;
+function ancMap(id, max = 9) {
+  const m = new Map([[id, { d: 0, via: null }]]);
+  let cur = [id];
+  for (let d = 1; d <= max && cur.length; d++) {
+    const nx = [];
+    cur.forEach((x) => {
+      const q = byId(x);
+      [["father", q?.father_id], ["mother", q?.mother_id]].forEach(([role, pid]) => {
+        if (!pid || m.has(pid)) return;
+        m.set(pid, { d, via: d === 1 ? role : m.get(x).via });
+        nx.push(pid);
+      });
+    });
+    cur = nx;
+  }
+  return m;
+}
+function bloodRel(fid, xid) {
+  if (fid === xid) return "Kendisi";
+  const x = byId(xid);
+  if (!x) return null;
+  const male = x.gender === "E", fem = x.gender === "K";
+  const af = ancMap(fid), ax = ancMap(xid);
+  if (af.has(xid)) {
+    const { d, via } = af.get(xid);
+    if (d === 1) return male ? "Babası" : fem ? "Annesi" : "Ebeveyni";
+    if (d === 2) return male ? "Dedesi" : fem ? (via === "father" ? "Babaannesi" : "Anneannesi") : "Dede/ninesi";
+    if (d === 3) return male ? "Büyük dedesi" : fem ? "Büyük ninesi" : "Büyük dede/ninesi";
+    return `${d}. kuşak üst atası`;
+  }
+  if (ax.has(fid)) {
+    const d = ax.get(fid).d;
+    if (d === 1) return male ? "Oğlu" : fem ? "Kızı" : "Çocuğu";
+    if (d === 2) return "Torunu";
+    if (d === 3) return "Torununun çocuğu";
+    return `${d}. kuşak alt soyu`;
+  }
+  let best = null;
+  ax.forEach((vx, c) => {
+    const vf = af.get(c);
+    if (!vf) return;
+    const s = vf.d + vx.d;
+    if (!best || s < best.s) best = { s, a: vf.d, b: vx.d, via: vf.via, xvia: vx.via };
+  });
+  if (!best) return null;
+  const { a, b, via, xvia } = best, pat = via === "father";
+  if (a === 1 && b === 1) return male ? "Erkek kardeşi" : fem ? "Kız kardeşi" : "Kardeşi";
+  if (a === 2 && b === 1) return pat ? (male ? "Amcası" : fem ? "Halası" : "Amca/halası") : (male ? "Dayısı" : fem ? "Teyzesi" : "Dayı/teyzesi");
+  if (a === 1 && b === 2) return "Yeğeni";
+  if (a === 2 && b === 2) return pat ? (xvia === "father" ? "Amcasının çocuğu" : "Halasının çocuğu") : (xvia === "father" ? "Dayısının çocuğu" : "Teyzesinin çocuğu");
+  if (a === 3 && b === 1) return "Dede/nine kardeşi";
+  return `Kan akrabası (${a}. ve ${b}. kuşak)`;
+}
+function relationTo(fid, xid) {
+  if (!fid || !xid) return null;
+  const b = bloodRel(fid, xid);
+  if (b) return b;
+  const x = byId(xid);
+  if (spousesOf(fid).includes(xid)) return "Eşi";
+  for (const s of spousesOf(xid)) {
+    const r = bloodRel(fid, s);
+    if (!r) continue;
+    if (["Amcası", "Dayısı", "Erkek kardeşi"].includes(r)) return x.gender === "K" ? "Yengesi" : `${r} eşi`;
+    if (["Halası", "Teyzesi", "Kız kardeşi"].includes(r)) return x.gender === "E" ? "Eniştesi" : `${r} eşi`;
+    if (r === "Oğlu") return "Gelini";
+    if (r === "Kızı") return "Damadı";
+    return `${r} eşi`;
+  }
+  for (const s of spousesOf(fid)) {
+    const r = bloodRel(s, xid);
+    if (r === "Babası") return "Kayınpederi";
+    if (r === "Annesi") return "Kayınvalidesi";
+    if (r) return "Eşinin akrabası";
+  }
+  return null;
+}
+function relForm() {
+  const cur = S.prefs.relNames || {};
+  showModal(`<h2>Akrabalık adları</h2>
+    <p class="muted">"Benim soyum" görünümünde bir kişinin üzerine gelince seçili kişiye göre akrabalığı yazılır. Adı değiştirmek için kutuya yazın (boş bırakırsanız varsayılan kullanılır). Ayar bu cihazda saklanır.</p>
+    <div class="relnames">${REL_KEYS.map((k, i) => `<label><span>${esc(k)}</span><input data-relkey="${i}" placeholder="${esc(k)}" value="${esc(cur[k] || "")}"></label>`).join("")}</div>
+    <div class="actions"><button type="button" class="btn" data-action="relReset">Varsayılana dön</button><button type="button" class="btn primary" data-action="saveRelNames">Kaydet</button></div>`, "pwide");
+}
+function saveRelNames() {
+  const o = {};
+  document.querySelectorAll("[data-relkey]").forEach((i) => { const v = i.value.trim(), k = REL_KEYS[Number(i.dataset.relkey)]; if (v && v !== k) o[k] = v; });
+  S.prefs.relNames = o;
+  savePrefs();
+  closeModal();
+  toast("Kaydedildi");
+}
+
 // ---------- kişi ayrıntısı ----------
 const personLink = (p) => (p ? `<a href="#" data-action="open" data-id="${p.id}">${esc(fullName(p))}</a>` : "");
 
 const fmtDT = (x) => new Date(x).toLocaleString("tr-TR", { dateStyle: "short", timeStyle: "short" });
 const fmtDate = (d) => (d ? String(d).slice(0, 10).split("-").reverse().join(".") : "");
-const relMeta = (x) => [years(x), x.city].filter(Boolean).join(" · ");
+const relMeta = (x) => [
+  x.birth_date ? `Doğum ${fmtDate(x.birth_date)}` : "",
+  isDead(x) ? `Vefat${x.death_date ? " " + fmtDate(x.death_date) : ""}` : "",
+  x.blood_type ? `Kan grubu ${x.blood_type}` : "",
+  isDead(x) && x.burial_place ? `Defin: ${x.burial_place}` : "",
+  x.city,
+].filter(Boolean).join(" · ") || years(x);
 
 async function openPerson(id) {
   const p = byId(id);
@@ -1139,12 +1268,11 @@ async function openPerson(id) {
   ].join("");
   const age = ageText(p);
   const info = [
-    ["Doğum", [fmtDate(p.birth_date), p.birth_place].filter(Boolean).join(" · ")],
+    ["Doğum", [fmtDate(p.birth_date), p.birth_place].filter(Boolean).join(" · ") || "—"],
     [isDead(p) ? "Yaşı" : "Şu anki yaşı", age],
     ["Yaşadığı şehir", p.city],
-    ["Kan grubu", p.blood_type],
-    ["Vefat", isDead(p) ? fmtDate(p.death_date) || "Vefat etti" : ""],
-    ["Defin yeri", isDead(p) ? p.burial_place : ""],
+    ["Kan grubu", p.blood_type || "—"],
+    ...(isDead(p) ? [["Vefat", fmtDate(p.death_date) || "Vefat etti"], ["Defin yeri", p.burial_place || "—"]] : []),
   ].filter(([, v]) => v);
   const notes = S.notes.filter((n) => n.person_id === id);
   const pend = S.requests.filter((r) => r.status === "pending" && r.person_id === id).length;
@@ -1158,20 +1286,20 @@ async function openPerson(id) {
     ${p.hidden_for ? `<p class="hiddenbar">${esc(hiddenLabel(p))}</p>` : ""}
     ${info.length ? `<table class="infotable">${info.map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join("")}</table>` : ""}
     ${p.notes ? `<p class="notes">${esc(p.notes)}</p>` : ""}
-    <h3>Aile</h3>
+    <div class="relhead"><h3>Aile</h3><button type="button" class="btn small" data-action="focusOn" data-id="${id}">🧬 Soyunu göster</button></div>
     ${rels ? `<table class="reltable"><tr class="hd"><th>Yakınlık</th><th>Kişi</th><th>Bilgi</th></tr>${rels}</table>` : `<p class="muted">Henüz bağlı yakını yok.</p>`}
     <div class="actions wrap">
       ${line ? `<button type="button" class="btn" data-action="addChild" data-id="${id}">+ Çocuk</button><button type="button" class="btn" data-action="addSibling" data-id="${id}">+ Kardeş</button><button type="button" class="btn" data-action="addSpouse" data-id="${id}">+ Eş</button>` : ""}
-      <button type="button" class="btn" data-action="focusOn" data-id="${id}">🧬 Soyunu göster</button>
+      ${isAdmin() ? `<button type="button" class="btn" data-action="quickInvite" data-id="${id}">✉️ Davet gönder</button>` : ""}
       ${canEditPerson(p) ? `<button type="button" class="btn" data-action="editPerson" data-id="${id}">Düzenle</button>` : ""}
-      ${canDeletePerson(p) ? `<button type="button" class="btn danger" data-action="deletePerson" data-id="${id}" title="Ekledikten sonraki ilk 5 dakika içinde hemen silinir; sonrasında yönetici onayı gerekir">${instantNow(p) ? "Sil" : "Silme talebi"}</button>` : ""}
+      ${canDeletePerson(p) ? `<button type="button" class="btn ghostdel" data-action="deletePerson" data-id="${id}" title="Ekledikten sonraki ilk 5 dakika içinde hemen silinir; sonrasında yönetici onayı gerekir">${instantNow(p) ? "Sil" : "Silme talebi"}</button>` : ""}
     </div>
     ${isAdmin() ? "" : `<p class="muted small">${isTrusted() ? "Onaysız yetkiniz var: eklediğiniz kişi, eş ve notlar hemen yayınlanır (yöneticiye bildirim gider). Düzenlemeler yönetici onayından sonra uygulanır." : instantAdd() ? "Eklediğiniz kişiler hemen sizin ekranınızda görünür; diğer üyeler yönetici onayından sonra görür. Diğer değişiklikler yönetici onayından sonra uygulanır." : "Yaptığınız değişiklikler yönetici onayından sonra listeye eklenir."} Başkasının eklediği kaydı silemezsiniz, ama bilgi notu ekleyebilirsiniz.</p>`}
     ${sideSection(p, spRows.length || impliedSp.length)}
     <h3>Bilgi notları <button type="button" class="btn small" data-action="addNote" data-id="${id}">+ Not</button></h3>
     ${notes.length ? notes.map((n) => `<div class="note"><div class="muted">${esc(n.author_name || profName(n.author_id) || "")} · ${fmtDT(n.created_at)}${ownerOk(n.author_id) ? ` <button type="button" class="mini" data-action="delNote" data-id="${n.id}" data-person="${id}" title="Notu sil (ilk 5 dakika hemen, sonra yönetici onayıyla)">×</button>` : ""}</div>${esc(n.body)}</div>`).join("") : `<p class="muted">Henüz not yok.</p>`}
     <h3>Fotoğraflar <button type="button" class="btn small" data-action="addPhoto" data-id="${id}">+ Fotoğraf</button></h3>
-    <div id="photoBox" class="muted" data-pid="${id}">Yükleniyor…</div>`);
+    <div id="photoBox" class="muted" data-pid="${id}">Yükleniyor…</div>`, "pwide");
 
   const photos = await loadPhotos(id);
   const box = document.getElementById("photoBox");
@@ -1586,7 +1714,8 @@ async function showPop(el) {
   popEl?.remove();
   popEl = document.createElement("div");
   popEl.id = "pop";
-  popEl.innerHTML = `${wantPhoto ? `<div class="pp-photo">…</div>` : ""}<b>${esc(fullName(p))}</b> <span class="muted">${esc(years(p))}</span>
+  const rel = S.tab === "tree" && S.view === "lineage" && el.closest(".tree") ? relationTo(S.focus, p.id) : null;
+  popEl.innerHTML = `${wantPhoto ? `<div class="pp-photo">…</div>` : ""}${rel ? `<div class="pp-rel">${esc(relName(rel))}</div>` : ""}<b>${esc(fullName(p))}</b> <span class="muted">${esc(years(p))}</span>
     ${age ? `<div>${isDead(p) ? "" : "Şu an: "}${esc(age)}</div>` : ""}${bits.map((b) => `<div>${esc(b)}</div>`).join("")}`;
   document.body.append(popEl);
   placePop(el);
@@ -1974,6 +2103,11 @@ const actions = {
   zoomReset: () => setZoom(1),
   zoomFit: fitZoom,
   genForm,
+  quickInvite: (id) => quickInvite(id),
+  quickInviteSave: (id, el) => quickInviteSave(id, el),
+  relForm: () => relForm(),
+  saveRelNames: () => saveRelNames(),
+  relReset: () => { S.prefs.relNames = {}; savePrefs(); relForm(); toast("Varsayılan adlara dönüldü"); },
   genReset: () => { S.gen.colors = []; saveGen(); applyBands(); genForm(); },
   pickCity: (k) => { S.fCity = S.fCity === k ? "" : k; renderView(); },
   clearFilters: () => { S.q = ""; S.fCity = ""; S.fSur = ""; S.fGender = ""; S.fStatus = ""; S.fBlood = ""; renderView(); },
@@ -2151,9 +2285,14 @@ document.addEventListener("scroll", hidePop, true);
 
 // Ctrl + fare tekerleği ile yakınlaştırma
 document.addEventListener("wheel", (e) => {
-  if (!e.ctrlKey || !e.target.closest?.(".tree-wrap")) return;
+  const wrap = e.target.closest?.(".tree-wrap");
+  if (!wrap || e.shiftKey || modal.classList.contains("open")) return; // Shift + tekerlek: yatay kaydırma
   e.preventDefault();
-  setZoom(S.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+  const r = wrap.getBoundingClientRect(), cx = e.clientX - r.left, cy = e.clientY - r.top;
+  const px = (wrap.scrollLeft + cx) / S.zoom, py = (wrap.scrollTop + cy) / S.zoom;
+  setZoom(S.zoom * Math.exp(-Math.max(-120, Math.min(120, e.deltaY)) * 0.0015));
+  wrap.scrollLeft = px * S.zoom - cx; // imlecin altındaki nokta yerinde kalsın
+  wrap.scrollTop = py * S.zoom - cy;
 }, { passive: false });
 
 // Dokunmatik ekranda iki parmakla yakınlaştırma

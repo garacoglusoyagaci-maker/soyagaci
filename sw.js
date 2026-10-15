@@ -1,6 +1,6 @@
 // Servis çalışanı: uygulama dosyalarını önbelleğe alır. Önce ağdan dener (güncellemeler hemen gelir),
 // ağ yoksa önbellekten açar. Supabase ve diğer dış adreslere karışmaz.
-const CACHE = "soyagaci-v13";
+const CACHE = "soyagaci-v14";
 const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {

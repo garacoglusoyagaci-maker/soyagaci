@@ -119,3 +119,11 @@ Uygulama internet bağlantısı ister, çünkü veriler Supabase'de durur.
 - Yakınlaştırma artık `transform` ile yapılır: iPhone'da yazılar kartların dışına taşmaz.
 - Kişi formunda "Evlenmeden önceki soyadı"; kartlarda ve listede gösterilir, aramada ve soyad filtresinde bulunur.
 - Kişiler sekmesinde sıralama: "Soyadına göre (A → Z, gruplu)".
+
+### Güncelleme 5: kişi penceresi, akrabalık adları
+- Kişi penceresi geniş; "🧬 Soyunu göster" Aile tablosunun sağ üstünde. "Silme talebi" sönük, üzerine gelince soluk sarı.
+- Aile tablosunun "Bilgi" sütununda doğum, vefat, kan grubu ve defin yeri yazar.
+- Yönetici kişi penceresinden "✉️ Davet gönder" ile e-posta kaydedip davet metnini hazırlar.
+- Fare tekerleği ağacı imlecin olduğu yerden yakınlaştırır (Shift + tekerlek yatay kaydırır).
+- "Benim soyum"da bir kişinin üzerine gelince seçili kişiye göre akrabalığı yazar (Amcası, Dedesi…). "✏️ Akrabalık adları" ile adlar düzenlenir (bu cihazda saklanır). Genel ağaçta gösterilmez.
+- Supabase'de yeni bir işlem gerekmez.
