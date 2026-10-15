@@ -127,3 +127,8 @@ Uygulama internet bağlantısı ister, çünkü veriler Supabase'de durur.
 - Fare tekerleği ağacı imlecin olduğu yerden yakınlaştırır (Shift + tekerlek yatay kaydırır).
 - "Benim soyum"da bir kişinin üzerine gelince seçili kişiye göre akrabalığı yazar (Amcası, Dedesi…). "✏️ Akrabalık adları" ile adlar düzenlenir (bu cihazda saklanır). Genel ağaçta gösterilmez.
 - Supabase'de yeni bir işlem gerekmez.
+
+### Güncelleme 6
+- "Benim soyum"da evlenip gelenlerin (gelin/damat) anne babası artık üst satırlarda gösterilmez; yalnızca kan bağı olan kişilerin ebeveynleri gösterilir (kartın altında küçük "↑ anne babası" notu kalır).
+- Baba tarafı kartları mavi/lavanta, anne tarafı kartları yeşil/şeftali tonunda; zoom çubuğunda renk anahtarı var.
+- Supabase'de yeni işlem gerekmez.

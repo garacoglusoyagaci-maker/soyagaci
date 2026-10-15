@@ -477,7 +477,7 @@ function absorb(into, n, dx) {
   into.cards.push(...n.cards); into.frames.push(...n.frames); into.mores.push(...n.mores);
 }
 function placeUnit(node, u, x, lv) {
-  u.ids.forEach((id, i) => node.cards.push({ id, x: x + i * (LN.CW + LN.AMP) + LN.CW / 2, lv }));
+  u.ids.forEach((id, i) => node.cards.push({ id, x: x + i * (LN.CW + LN.AMP) + LN.CW / 2, lv, side: u.side || null }));
   if (u.ids.length > 1) node.frames.push({ ids: u.ids, x0: x - LN.PAD, x1: x + unitW(u) + LN.PAD, lv });
 }
 function mkUnit(p, withSp, ctx) {
@@ -487,13 +487,14 @@ function mkUnit(p, withSp, ctx) {
   return { ids, main: p.id };
 }
 // Yukarı doğru: kişi + kardeşleri (aynı satır) ve üstlerinde ebeveyn çifti. anchor: R = baba tarafı (sağa yaslı), L = anne tarafı (sola yaslı), C = ortalı
-function buildSibship(pid, d, anchor, ctx) {
+function buildSibship(pid, d, anchor, ctx, side = null) {
   const p = byId(pid);
   ctx.placed.add(pid);
   const sibs = ctx.sibs ? siblingsOf(p).filter((x) => !ctx.placed.has(x.id)).sort(kidCmp) : [];
   sibs.forEach((x) => ctx.placed.add(x.id));
   const mainU = mkUnit(p, d === 0, ctx);
   const sibU = sibs.map((x) => mkUnit(x, true, ctx));
+  if (d > 0) [mainU, ...sibU].forEach((u) => { u.side = side; }); // baba tarafı (P) / anne tarafı (M)
   let units;
   if (anchor === "R") units = [...sibU, mainU];
   else if (anchor === "L") units = [mainU, ...sibU];
@@ -506,7 +507,7 @@ function buildSibship(pid, d, anchor, ctx) {
     if (!fo && !mo) return;
     if (d >= ctx.up) { ctx.trunc = true; return; }
     if (fo && mo) {
-      const fb = buildSibship(f.id, d + 1, "R", ctx), mb = buildSibship(m.id, d + 1, "L", ctx);
+      const fb = buildSibship(f.id, d + 1, "R", ctx, d === 0 ? "P" : side), mb = buildSibship(m.id, d + 1, "L", ctx, d === 0 ? "M" : side);
       const n = newNode();
       n.w = fb.w + LN.AMP + mb.w;
       absorb(n, fb, 0);
@@ -514,9 +515,10 @@ function buildSibship(pid, d, anchor, ctx) {
       const fc = n.cards.find((c) => c.id === f.id), mc = n.cards.find((c) => c.id === m.id);
       n.frames.push({ ids: [f.id, m.id], x0: fc.x - LN.CW / 2 - LN.PAD, x1: mc.x + LN.CW / 2 + LN.PAD, lv: -(d + 1) });
       slots.push(n);
-    } else slots.push(buildSibship((fo ? f : m).id, d + 1, "C", ctx));
+    } else slots.push(buildSibship((fo ? f : m).id, d + 1, "C", ctx, d === 0 ? (fo ? "P" : "M") : side));
   };
-  units.forEach((u) => u.ids.forEach((id) => slotFor(byId(id))));
+  // yalnızca kan bağı olan kişilerin ebeveynleri gösterilir; gelinin/damadın (evlenip gelenlerin) anne babası gösterilmez
+  units.forEach((u) => slotFor(byId(u.main)));
   const rowW = units.reduce((s, u) => s + unitW(u), 0) + LN.GAP * (units.length - 1);
   const upW = slots.reduce((s, n) => s + n.w, 0) + LN.GAP * Math.max(0, slots.length - 1);
   const w = Math.max(rowW, upW);
@@ -596,7 +598,7 @@ function lineageHtml() {
   return `<div class="lin-in">${m.cards.map((c) => {
     const p = byId(c.id);
     const chip = (p.father_id || p.mother_id) && !shown.has(p.father_id) && !shown.has(p.mother_id);
-    return `<div class="lcard${c.id === m.focus ? " lfocus" : ""}" data-cid="${c.id}" style="left:${c.x - LN.CW / 2}px">${partner(c.id, !!chip)}</div>`;
+    return `<div class="lcard${c.id === m.focus ? " lfocus" : ""}${c.side ? " side" + c.side : ""}" data-cid="${c.id}" style="left:${c.x - LN.CW / 2}px">${partner(c.id, !!chip)}</div>`;
   }).join("")}</div>`;
 }
 // Kartların gerçek yükseklikleri ölçülür; satırlar, çerçeveler, nesil bantları, etiketler ve renkli çizgiler yerleştirilir.
@@ -740,7 +742,7 @@ function renderTree(v) {
       <button type="button" class="btn small" data-action="zoomIn" aria-label="Yakınlaştır">🔍+</button>
       <button type="button" class="btn small" data-action="zoomFit">Tümünü sığdır</button>
       ${lin && S.lin?.trunc ? `<button type="button" class="btn small" data-action="moreUp">↑ Daha üst nesiller var</button>` : ""}
-      ${lin ? `<button type="button" class="btn small" data-action="relForm">✏️ Akrabalık adları</button><span class="muted">Satır aralığı</span><button type="button" class="btn small" data-action="gapLess" aria-label="Satır aralığını azalt">↕−</button><button type="button" class="btn small" data-action="gapMore" aria-label="Satır aralığını artır">↕+</button>` : ""}
+      ${lin ? `<span class="sidekey"><i class="sp"></i>Baba tarafı <i class="sm"></i>Anne tarafı</span><button type="button" class="btn small" data-action="relForm">✏️ Akrabalık adları</button><span class="muted">Satır aralığı</span><button type="button" class="btn small" data-action="gapLess" aria-label="Satır aralığını azalt">↕−</button><button type="button" class="btn small" data-action="gapMore" aria-label="Satır aralığını artır">↕+</button>` : ""}
       <button type="button" class="btn small" data-action="zoomReset">%100</button>
     </div>
     <div class="tree-wrap"><div class="tree-sizer"><div class="tree${lin ? " lin" : ""}">${lin ? linHtml : all ? forestHtml() : `<ul>${(S.maxGen = 0, nodeHtml(S.rootId, new Set(), true))}</ul>`}</div></div></div>

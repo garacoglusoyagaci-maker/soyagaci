@@ -292,3 +292,13 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 #pop .pp-rel { display: block; width: max-content; max-width: 100%; margin-bottom: .2rem; padding: .05rem .5rem; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: .78rem; font-weight: 700; }
 .relnames { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: .4rem .8rem; margin: .6rem 0; }
 .relnames label { margin: 0; font-size: .82rem; } .relnames label span { display: block; color: var(--muted); }
+
+/* ---------- baba tarafı / anne tarafı kart renkleri ---------- */
+:root { --pm: #cde4f7; --pf: #e2dbf6; --mm: #d6ecce; --mf: #fbe2c3; }
+@media (prefers-color-scheme: dark) { :root { --pm: #23405c; --pf: #3a3358; --mm: #2a4a2c; --mf: #5a3f26; } }
+.tree.lin .sideP .pcard.m { background: var(--pm); } .tree.lin .sideP .pcard.f { background: var(--pf); }
+.tree.lin .sideM .pcard.m { background: var(--mm); } .tree.lin .sideM .pcard.f { background: var(--mf); }
+.sidekey { display: inline-flex; align-items: center; gap: .3rem; font-size: .82rem; color: var(--muted); }
+.sidekey i { display: inline-block; width: 22px; height: 12px; border-radius: 4px; border: 1px solid var(--border); }
+.sidekey i.sp { background: linear-gradient(90deg, var(--pm) 50%, var(--pf) 50%); margin-left: .3rem; }
+.sidekey i.sm { background: linear-gradient(90deg, var(--mm) 50%, var(--mf) 50%); margin-left: .6rem; }
